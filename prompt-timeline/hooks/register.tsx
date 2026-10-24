@@ -628,8 +628,8 @@ function wrap(text: string, room: number, most: number): string[] {
 // The tree drawn as lanes, top down, each prompt a dot on its branch's line,
 // below the one it was asked after. At every split the newest branch carries
 // on down the lane and older ones fork off one lane to the right, each drawn
-// whole before the lane goes on. A row of lines sits between every two
-// prompts: it carries each line on, or forks a branch off (`├─╮`). Where the
+// whole before the lane goes on. Each prompt has the row of lines above it:
+// it carries each line on, or forks a branch off (`├─╮`). Where the
 // conversation stands decides only which dots are lit and which lines are the
 // accent, so a switch moves nothing; a new branch takes its lane. A rewind to
 // the top leaves more than one first prompt: they split the same way, from a
@@ -1374,10 +1374,8 @@ export const register: Register = on => {
 
             return (
               <Box flexDirection="column">
-                {/* Between two prompts, a row of the lines running on; above the first, the fork of a rewind to the top. */}
-                {(index > 0 || node.above.length > 0) && (
-                  <Box height={1}>{node.above.length > 0 ? lines(node.above) : <Text> </Text>}</Box>
-                )}
+                {/* Above a prompt, only a fork: a line that runs on is drawn by the rows beside it, so the prompts sit one under another. */}
+                {node.above.some(cell => cell.text === '─╮') && <Box height={1}>{lines(node.above)}</Box>}
                 <Box
                   justifyContent="space-between"
                   height={1}

@@ -141,9 +141,8 @@ test('the tree draws every branch under the prompt it grew from, and marks where
     { color: 'planMode' },
     { bold: true },
   ])
-  // Between two prompts, a row of lines: above the old branch it forks off the
-  // lane, which the path runs on down past it, lit; the branch takes a colour
-  // of its own.
+  // Above the old branch a row of lines forks it off the lane, which the path
+  // runs on down past it, lit; the branch takes a colour of its own.
   expect((await ui.find({ type: 'Text', text: '├' }))?.props).toEqual({ color: 'claude' })
   expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'planMode' })
   expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'claude' })
@@ -301,9 +300,12 @@ test('a rewind to the top starts a line of its own, and the conversation it left
   // the old conversation, lit, to where the session stands.
   expect((await ui.find({ type: 'Text', text: '┬' }))?.props).toEqual({ color: 'claude' })
   expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'planMode' })
-  const colours = (await ui.findAll({ type: 'Text', text: '│' })).map(line => line.props?.color)
-  expect(colours.filter(colour => colour !== 'claude')).toEqual(['planMode'])
-  expect(colours.at(-1)).toBe('claude')
+  // No row of lines between the prompts: the lane runs on, lit, beside them.
+  expect(await ui.findAll({ type: 'Text', text: /^│$/ })).toEqual([])
+  expect((await ui.findAll({ type: 'Text', text: /^│ $/ })).map(line => line.props)).toEqual([
+    { color: 'claude' },
+    { color: 'claude' },
+  ])
   expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'planMode' })
   await ui.unmount()
 })
