@@ -83,7 +83,10 @@ const REPLY_CHARS = 800
 // another tool it used, and `git` is 2 where a command pushed, 1 where one
 // committed. The conversation stands where the newest row is, or at the leaf a
 // `last-prompt` record after it names (a rewind writes one). A compacted row's
-// parent is the row it summed up; a subagent's rows are left out.
+// parent is the row it summed up; a subagent's rows are left out. A prompt
+// Claude Code numbers 1 starts the conversation over, after a rewind to the
+// top, so it has no parent, whatever row it names: Claude Code can name the
+// last row of the conversation it left.
 const TREE_SCAN = `
 function field(key,   start, rest) {
   if (!(start = index($0, key))) return ""
@@ -136,6 +139,7 @@ index($0, "{\\"parentUuid\\":") == 1 {
   }
   if (!index($0, "\\"origin\\":{\\"kind\\":\\"human\\"}") && !index($0, "\\"origin\\":{\\"kind\\":\\"bridge\\"}")) next
   if (index($0, "\\"isMeta\\":true")) next
+  if (match($0, /"turnPosition":\\{"promptIndex":1[,}]/)) up[id] = ""
   key = "\\"message\\":{\\"role\\":\\"user\\",\\"content\\":\\""
   if (!index($0, key)) key = "\\"type\\":\\"text\\",\\"text\\":\\""
   text = opening(key, ${PROMPT_CHARS})
@@ -635,7 +639,9 @@ function wrap(text: string, room: number, most: number): string[] {
 // whole before the lane goes on. A row of lines sits between every two
 // prompts: it carries each line on, or forks a branch off (`├─╮`). Where the
 // conversation stands decides only which dots are lit and which lines are the
-// accent, so a switch moves nothing; a new branch takes its lane.
+// accent, so a switch moves nothing; a new branch takes its lane. A rewind to
+// the top leaves more than one first prompt: they split the same way, from a
+// fork above the first row (`┬─╮`).
 function layout(list: Turn[], here: string): TreeNode[] {
   const byId = new Map(list.map(turn => [turn.id, turn]))
   const roots: Turn[] = []
@@ -653,11 +659,26 @@ function layout(list: Turn[], here: string): TreeNode[] {
 
   const nodes: TreeNode[] = []
   let branches = 0
+  // Draws the prompts asked at one point, at `depth`, beside `lanes`: older
+  // ones fork off one lane to the right, each drawn whole, and the newest is
+  // returned to carry on down the lane, whose own turns are `branch`.
+  const split = (next: Turn[], depth: number, lanes: number[], branch: number): Turn | undefined => {
+    const sides = next.slice(0, -1)
+    const onward: Turn | undefined = next[next.length - 1]
+    sides.forEach((side, index) => {
+      // The path runs on down this lane past the branch to the onward
+      // prompt or to a later branch.
+      const leadsOn = [onward!, ...sides.slice(index + 1)].some(later => path.has(later.id))
+      const lane = leadsOn ? PATH : branch
+      draw(side, depth, [...lanes, lane], path.has(side.id) ? PATH : lane)
+    })
+
+    return onward
+  }
   // Draws a branch from its first prompt, right of `lanes`, each the tone its
   // line goes on below in. Its first row forks from the lane left of it, in
   // the `fork` tone.
-  const draw = (first: Turn, depth: number, lanes: number[], fork: number | undefined) => {
-    const branch = branches++
+  const draw = (first: Turn, depth: number, lanes: number[], fork: number | undefined, branch = branches++) => {
     const beside = lanes.map(tone => ({ text: '│ ', tone }))
     const own: TreeNode[] = []
     let turn: Turn | undefined = first
@@ -684,18 +705,7 @@ function layout(list: Turn[], here: string): TreeNode[] {
       }
       nodes.push(node)
       own.push(node)
-
-      const next: Turn[] = children.get(turn.id) ?? []
-      const sides = next.slice(0, -1)
-      const onward: Turn | undefined = next[next.length - 1]
-      sides.forEach((side, index) => {
-        // The path runs on down this lane past the branch to the onward
-        // prompt or to a later branch.
-        const leadsOn = [onward!, ...sides.slice(index + 1)].some(later => path.has(later.id))
-        const lane = leadsOn ? PATH : branch
-        draw(side, depth + 1, [...lanes, lane], path.has(side.id) ? PATH : lane)
-      })
-      turn = onward
+      turn = split(children.get(turn.id) ?? [], depth + 1, lanes, branch)
     }
 
     // The path runs down the start of a branch, if at all: the rest of it is a
@@ -706,7 +716,16 @@ function layout(list: Turn[], here: string): TreeNode[] {
       left[0].chip = isUnanswered ? 'no reply' : `${left.length} turn${left.length === 1 ? '' : 's'}`
     }
   }
-  for (const root of roots) draw(root, 1, [], undefined)
+  // The first prompts split as any turn's do. Nothing runs down into the
+  // first fork, and the lane runs on past the older starts to the newest.
+  const main = branches++
+  const newest = split(roots, 1, [], main)
+  const older = nodes.length
+  if (newest !== undefined) draw(newest, 1, [], undefined, main)
+  if (older > 0) {
+    nodes[0]!.above = nodes[0]!.above.map(cell => (cell.text === '├' ? { ...cell, text: '┬' } : cell))
+    nodes[older]!.above = [{ text: '│', tone: nodes[older]!.tone }]
+  }
 
   return nodes
 }
@@ -1332,9 +1351,14 @@ export const register: Register = on => {
       }
 
       // Where the conversation stands: on the line the tree starts down, or on
-      // a branch it took at a turn.
+      // a branch it took at a turn, or at the top.
       const left = nodes.find(node => node.place !== 'off' && node.lane > 0)
-      const where = left === undefined ? 'on the main line' : `on a branch from turn ${left.depth - 1}`
+      const where =
+        left === undefined
+          ? 'on the main line'
+          : left.depth === 1
+            ? 'on a branch from the start'
+            : `on a branch from turn ${left.depth - 1}`
       const context = await $.session
         .usage()
         .then(usage => usage.context.percent)
@@ -1356,8 +1380,10 @@ export const register: Register = on => {
 
             return (
               <Box flexDirection="column">
-                {/* Between two prompts, a row of the lines running on. */}
-                {index > 0 && <Box height={1}>{node.above.length > 0 ? lines(node.above) : <Text> </Text>}</Box>}
+                {/* Between two prompts, a row of the lines running on; above the first, the fork of a rewind to the top. */}
+                {(index > 0 || node.above.length > 0) && (
+                  <Box height={1}>{node.above.length > 0 ? lines(node.above) : <Text> </Text>}</Box>
+                )}
                 <Box
                   justifyContent="space-between"
                   height={1}

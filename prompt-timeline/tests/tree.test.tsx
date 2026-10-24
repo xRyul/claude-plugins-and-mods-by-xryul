@@ -203,6 +203,50 @@ test('after a rewind, the prompts past where the session stands stay where they 
   await ui.unmount()
 })
 
+// A session rewound to the top: a-b first, then c, asked over again from
+// nothing, where the conversation stands.
+const RESTART = [
+  'H\tc',
+  'T\ta\t\t2026-10-20T13:00:00Z\ta9\t0\t1\t\t0\tfirst"\tfirst reply"',
+  'T\tb\ta\t2026-10-20T13:01:00Z\tb9\t0\t1\t\t0\tsecond"\tsecond reply"',
+  'T\tc\t\t2026-10-20T13:02:00Z\tc9\t0\t1\t\t0\tfirst again"\tfirst reply again"',
+]
+
+test('a rewind to the top starts a line of its own, and the conversation it left forks off above it', async ($, on) => {
+  engine(on, undefined, RESTART)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
+  await ui.press({ key: 'tree-toggle' })
+
+  expect(await rows(ui)).toEqual(['│ ○ 1 first', '│ ○ 2 second', '◉ 1 first again'])
+  expect(await ui.find({ type: 'Text', text: '1 turn · 1 branch' })).toBeDefined()
+  // The fork sits above the first row, nothing above it; the lane runs on past
+  // the old conversation, lit, to where the session stands.
+  expect((await ui.find({ type: 'Text', text: '┬' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'planMode' })
+  const colours = (await ui.findAll({ type: 'Text', text: '│' })).map(line => line.props?.color)
+  expect(colours.filter(colour => colour !== 'claude')).toEqual(['planMode'])
+  expect(colours.at(-1)).toBe('claude')
+  expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'planMode' })
+  expect((await ui.find({ type: 'Text', text: / turn 1 · / }))?.text).toBe('◉ turn 1 · on the main line')
+  await ui.unmount()
+})
+
+test('back on the conversation a rewind to the top left, the tree says it branched from the start', async ($, on) => {
+  engine(on, undefined, ['H\tb', ...RESTART.slice(1)])
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
+  await ui.press({ key: 'tree-toggle' })
+
+  expect(await rows(ui)).toEqual(['│ ● 1 first', '│ ◉ 2 second', '○ 1 first again'])
+  expect(await ui.find({ type: 'Text', text: '2 turns · 1 branch' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: '┬' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'merged' })
+  expect((await ui.find({ type: 'Text', text: /1 turn$/ }))?.props).toEqual({ color: 'merged' })
+  expect((await ui.find({ type: 'Text', text: / turn 2 · / }))?.text).toBe('◉ turn 2 · on a branch from the start')
+  await ui.unmount()
+})
+
 test("the last row copies the command that opens the session where it stands", async ($, on) => {
   const { copies } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
