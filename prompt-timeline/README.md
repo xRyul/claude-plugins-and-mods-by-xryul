@@ -4,7 +4,7 @@ A pane beside the chat that lists every prompt in the current session, with how 
 
 - Click a prompt to scroll the transcript to it.
 - Use find to search the full text of every prompt.
-- Use tree to see every branch a rewind left behind, and continue from one. Each prompt's card copies a `/resume-at` command for its turn.
+- Use tree to see every branch a rewind left behind, and continue from one. Each prompt is a numbered dot on its branch's line, followed by what its turn did (files changed, commands run, a commit or a push) and when you sent it. Your own line is in the accent colour, and every other branch has a colour of its own. Click a prompt on another branch to read its last reply and continue from it. Each card, and the tree's last row, copies a `/resume-at` command.
 - `/timeline` shows or hides the pane.
 - `/resume-at <session-id>:<message-id>` opens a session at one of its messages, from any Claude Code session. `/resume-at <message-id>` does it in the current session.
 

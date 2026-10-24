@@ -151,7 +151,8 @@ test('a query matching more than a hundred prompts draws the newest hundred', as
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   for (let i = 1; i <= 130; i++) await $.session.append(prompt(`u${i}`, `step ${i} of the plan`))
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // Wide enough for the count of matches beside the header's controls.
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 52 }, surface: 'terminal' })
   await ui.press({ key: 'search-toggle' })
   await type(ui, 'plan')
   await clock.settle()
@@ -196,7 +197,7 @@ test('the header gives way as the dock narrows', async ($, on) => {
 
     return { isNamed: texts.includes('Timeline'), isCounted: texts.includes('1 prompt') }
   }
-  expect(await at(44)).toEqual({ isNamed: true, isCounted: true })
-  expect(await at(36)).toEqual({ isNamed: false, isCounted: true })
-  expect(await at(34)).toEqual({ isNamed: false, isCounted: false })
+  expect(await at(50)).toEqual({ isNamed: true, isCounted: true })
+  expect(await at(42)).toEqual({ isNamed: false, isCounted: true })
+  expect(await at(40)).toEqual({ isNamed: false, isCounted: false })
 })

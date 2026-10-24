@@ -15,18 +15,22 @@ const PANE = {
   },
 } as const
 
+// A dock wide enough for the header's count beside its controls.
+const WIDE = { ...PANE, props: { ...PANE.props, bodyColumns: 64 } } as const
+
 const TRANSCRIPT = '/home/me/.claude/projects/-work/s1.jsonl'
 
 // The tree scan's records for a session rewound to b: a-b-c-d first, then
-// e-f from b, where the conversation stands.
+// e-f from b, where the conversation stands. Each turn did something else:
+// nothing but reply, two commands, a file, another tool, a commit, a push.
 const SCAN = [
   'H\tf',
-  'T\ta\t\t2026-10-20T13:00:00Z\ta9\tfirst"\tfirst reply"',
-  'T\tb\ta\t2026-10-20T13:01:00Z\tb9\tsecond"\tsecond reply"',
-  'T\tc\tb\t2026-10-20T13:02:00Z\tc9\tthird"\tthird reply"',
-  'T\td\tc\t2026-10-20T13:03:00Z\td9\tfourth"\tthe border is \\"done\\""',
-  'T\te\tb\t2026-10-20T13:04:00Z\te9\tfifth"\tfifth reply"',
-  'T\tf\te\t2026-10-20T13:05:00Z\tf9\tsixth"\tsixth reply"',
+  'T\ta\t\t2026-10-20T13:00:00Z\ta9\t0\t0\t\t0\tfirst"\tfirst reply"',
+  'T\tb\ta\t2026-10-20T13:01:00Z\tb9\t2\t0\t\t0\tsecond"\tsecond reply"',
+  'T\tc\tb\t2026-10-20T13:02:00Z\tc9\t0\t1\t\t0\tthird"\tthird reply"',
+  'T\td\tc\t2026-10-20T13:03:00Z\td9\t0\t0\tArtifact\t0\tfourth"\tthe border is \\"done\\""',
+  'T\te\tb\t2026-10-20T13:04:00Z\te9\t1\t0\t\t1\tfifth"\tfifth reply"',
+  'T\tf\te\t2026-10-20T13:05:00Z\tf9\t1\t0\t\t2\tsixth"\tsixth reply"',
 ]
 
 // The engine beneath the plugin, as far as these tests reach it: a transcript
@@ -77,38 +81,90 @@ const engine = (on: On, resume?: () => Promise<unknown>, scan = SCAN) => {
 
 const rows = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: unknown; text: string }[]> }) =>
   (await ui.findAll({ type: 'Button' }))
-    .filter(button => /^[a-f]$/.test(String(button.key)))
+    .filter(button => /^[a-g]$/.test(String(button.key)))
     .map(button => button.text)
 
 test('the tree draws every branch under the prompt it grew from, and marks where the session stands', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
   await ui.press({ key: 'tree-toggle' })
 
-  expect((await ui.find({ key: 'tree-toggle' }))?.text).toBe('● tree')
-  // Each row: the lanes, then the turn number on the conversation's prompts or
-  // a circle on a branch a rewind left, then the prompt. At b the newer branch,
-  // e, carries on down the lane and the older one sticks out.
+  // The switch shows the tree filled in the accent, the list beside it on the
+  // theme's shade.
+  expect((await ui.find({ type: 'Text', text: ' tree ' }))?.props).toEqual({
+    backgroundColor: 'claude',
+    color: 'inverseText',
+    bold: true,
+  })
+  expect((await ui.find({ type: 'Text', text: ' list ' }))?.props).toEqual({
+    backgroundColor: 'userMessageBackground',
+    dimColor: true,
+  })
+  expect(await ui.find({ type: 'Text', text: '4 turns · 1 branch' })).toBeDefined()
+  // Each row: the lanes and the prompt's dot on its own, then its turn number,
+  // then the prompt. At b the newer branch, e, carries on down the lane and the
+  // older one forks off.
   expect(await rows(ui)).toEqual([
-    '1 first',
-    '2 second',
-    '├─○ third',
-    '│ ○ fourth',
-    '3 fifth',
-    '4 sixth',
+    '● 1 first',
+    '● 2 second',
+    '│ ○ 3 third',
+    '│ ○ 4 fourth',
+    '● 3 fifth',
+    '◉ 4 sixth',
   ])
-  const here = await ui.find({ type: 'Text', text: 'sixth' })
-  expect(here?.props).toEqual(expect.objectContaining({ color: 'claude', bold: true }))
-  expect((await ui.find({ type: 'Text', text: '4 ' }))?.props).toEqual({ color: 'claude', bold: true })
-  // The path runs on down the lane past the old branch: lit; the branch's own
-  // line is not.
-  expect((await ui.find({ type: 'Text', text: /^├$/ }))?.props).toEqual({ color: 'claude' })
-  expect((await ui.find({ type: 'Text', text: /^─$/ }))?.props).toEqual({ dimColor: true })
-  expect((await ui.find({ type: 'Text', text: /^│ $/ }))?.props).toEqual({ color: 'claude' })
-  expect((await ui.find({ type: 'Text', text: /← here/ }))?.text).toBe('    ← here')
-  expect(await ui.findAll({ type: 'Text', text: /← here/ })).toHaveLength(1)
-  expect((await ui.find({ type: 'Text', text: 'third' }))?.props).toEqual({ dimColor: true })
+  expect((await ui.find({ type: 'Text', text: 'sixth' }))?.props).toEqual({ bold: true })
+  expect((await ui.findAll({ type: 'Text', text: /^ 4 $/ })).map(number => number.props)).toEqual([
+    { color: 'planMode' },
+    { bold: true },
+  ])
+  // Between two prompts, a row of lines: above the old branch it forks off the
+  // lane, which the path runs on down past it, lit; the branch takes a colour
+  // of its own.
+  expect((await ui.find({ type: 'Text', text: '├' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'planMode' })
+  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: /^○$/ }))?.props).toEqual({ color: 'planMode' })
+  // Each row ends with what the turn did, the branch's first with its length,
+  // and the row where the conversation stands with where it is.
+  expect((await ui.find({ type: 'Text', text: /⇡ pushed$/ }))?.props).toEqual({ color: 'warning' })
+  expect((await ui.find({ type: 'Text', text: /● committed$/ }))?.props).toEqual({ color: 'warning' })
+  expect((await ui.find({ type: 'Text', text: /› 2 cmds$/ }))?.props).toEqual({ dimColor: true })
+  expect((await ui.find({ type: 'Text', text: /◇ Artifact$/ }))?.props).toEqual({ color: 'suggestion' })
+  expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'planMode' })
+  expect(await ui.findAll({ type: 'Text', text: /◂ here/ })).toHaveLength(1)
+  expect((await ui.find({ type: 'Text', text: / turn 4 · / }))?.text).toBe('◉ turn 4 · on the main line')
+  await ui.unmount()
+})
+
+test('a branch of a branch forks off its own line, one lane further in', async ($, on) => {
+  // c and its branch g fork off b; g left no reply.
+  engine(on, undefined, [
+    ...SCAN,
+    'T\tg\tc\t2026-10-20T13:06:00Z\tg9\t0\t0\t\t0\tseventh"\t',
+  ].sort((one, other) => (one.startsWith('T\tg') ? -1 : 0) - (other.startsWith('T\tg') ? -1 : 0)))
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
+  await ui.press({ key: 'tree-toggle' })
+
+  expect(await rows(ui)).toEqual([
+    '● 1 first',
+    '● 2 second',
+    '│ ○ 3 third',
+    '│ │ ○ 4 seventh',
+    '│ ○ 4 fourth',
+    '● 3 fifth',
+    '◉ 4 sixth',
+  ])
+  expect(await ui.find({ type: 'Text', text: '4 turns · 2 branches' })).toBeDefined()
+  // g's fork leaves c's line, in c's colour, and g's line takes the next.
+  const forks = await ui.findAll({ type: 'Text', text: '├' })
+  expect(forks.map(fork => fork.props)).toEqual([{ color: 'claude' }, { color: 'planMode' }])
+  expect((await ui.findAll({ type: 'Text', text: '─╮' })).map(fork => fork.props)).toEqual([
+    { color: 'planMode' },
+    { color: 'bashBorder' },
+  ])
+  expect((await ui.find({ type: 'Text', text: /no reply$/ }))?.props).toEqual({ color: 'bashBorder' })
   await ui.unmount()
 })
 
@@ -118,19 +174,21 @@ test('a switch moves the numbers and the lit lines, never the rows', async ($, o
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'tree-toggle' })
 
-  // The same rows as when the session stood at f: now d is turn 4, and the
-  // path turns off the lane into the old branch.
+  // The same rows as when the session stood at f: now the path turns off the
+  // lane into the old branch, and the lane's own turns are a branch it left.
   expect(await rows(ui)).toEqual([
-    '1 first',
-    '2 second',
-    '├─3 third',
-    '│ 4 fourth',
-    '○ fifth',
-    '○ sixth',
+    '● 1 first',
+    '● 2 second',
+    '│ ● 3 third',
+    '│ ◉ 4 fourth',
+    '○ 3 fifth',
+    '○ 4 sixth',
   ])
-  expect((await ui.find({ type: 'Text', text: /^├$/ }))?.props).toEqual({ color: 'claude' })
-  expect((await ui.find({ type: 'Text', text: /^─$/ }))?.props).toEqual({ color: 'claude' })
-  expect((await ui.find({ type: 'Text', text: /^│ $/ }))?.props).toEqual({ dimColor: true })
+  expect((await ui.find({ type: 'Text', text: '├' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'claude' })
+  expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'merged' })
+  expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'merged' })
+  expect((await ui.find({ type: 'Text', text: / turn 4 · / }))?.text).toBe('◉ turn 4 · on a branch from turn 2')
   await ui.unmount()
 })
 
@@ -140,8 +198,19 @@ test('after a rewind, the prompts past where the session stands stay where they 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'tree-toggle' })
 
-  expect(await rows(ui)).toEqual(['1 first', '2 second', '├─○ third', '│ ○ fourth', '○ fifth', '○ sixth'])
-  expect((await ui.find({ type: 'Text', text: '2 ' }))?.props).toEqual({ color: 'claude', bold: true })
+  expect(await rows(ui)).toEqual(['● 1 first', '◉ 2 second', '│ ○ 3 third', '│ ○ 4 fourth', '○ 3 fifth', '○ 4 sixth'])
+  expect((await ui.find({ type: 'Text', text: 'second' }))?.props).toEqual({ bold: true })
+  await ui.unmount()
+})
+
+test("the last row copies the command that opens the session where it stands", async ($, on) => {
+  const { copies } = engine(on)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tree-toggle' })
+  await ui.press({ key: 'copy-here' })
+
+  expect(copies).toEqual(['/resume-at s1:f9'])
   await ui.unmount()
 })
 
@@ -153,7 +222,12 @@ test('a prompt on an abandoned branch opens a card with its reply', async ($, on
 
   await ui.press({ key: 'd' })
   expect(await ui.find({ type: 'Text', text: 'the border is "done"' })).toBeDefined()
-  expect((await ui.find({ key: 'switch:d' }))?.text).toBe('↪ continue from here')
+  expect((await ui.find({ key: 'switch:d' }))?.text).toBe(' ↪ continue here ')
+  expect((await ui.find({ type: 'Text', text: ' ↪ continue here ' }))?.props).toEqual({
+    backgroundColor: 'planMode',
+    color: 'inverseText',
+    bold: true,
+  })
   expect((await ui.find({ key: 'copy:d' }))?.text).toBe('⧉ copy /resume-at …:d9')
 
   // A second press closes it. A prompt on the way here scrolls to it, and its
@@ -227,7 +301,9 @@ test('find leaves the tree for the list', async ($, on) => {
   await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'search-toggle' })
 
-  expect((await ui.find({ key: 'tree-toggle' }))?.text).toBe('○ tree')
+  expect((await ui.find({ type: 'Text', text: ' list ' }))?.props).toEqual(
+    expect.objectContaining({ backgroundColor: 'claude' }),
+  )
   expect(await rows(ui)).toEqual([])
   await ui.unmount()
 })

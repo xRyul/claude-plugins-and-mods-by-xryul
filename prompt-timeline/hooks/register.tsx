@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer, UiPressArgument } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren, Timer, UiPressArgument } from 'claude-code'
 
-import type { SearchHit, SearchResults, TimelineEntry, TreeLine, TreeNode } from '../types'
+import type { Outcome, SearchHit, SearchResults, TimelineEntry, TreeLine, TreeNode } from '../types'
 
 const PANE = 'prompt-timeline'
 const TITLE = 'Timeline'
-// Room for the header's three controls.
-const COLUMNS = 30
+// Room for the header's controls.
+const COLUMNS = 32
 const MAX_ENTRIES = 1000
 // The most of a prompt any pane draws: wider than a docked pane gets.
 const PREVIEW = 200
@@ -61,8 +61,12 @@ END {
 const AGE_COLUMNS = 8
 // The context column's width: "100%".
 const CONTEXT_COLUMNS = 4
-// The header's controls, `  ● ctx  ○ find  ○ tree`, and its title, `◆ Timeline`.
-const CONTROL_COLUMNS = 23
+// The header's controls: the switch between the list and the tree, `  list
+// tree `, `  ○ find`, and `  ● ctx`, which only the list shows; and its title,
+// `◆ Timeline`.
+const SWITCH_COLUMNS = 14
+const FIND_COLUMNS = 8
+const CONTEXT_TOGGLE_COLUMNS = 7
 const TITLE_COLUMNS = 10
 
 // How much of a prompt, and of the turn's last reply, the tree scan copies out
@@ -71,17 +75,24 @@ const PROMPT_CHARS = 400
 const REPLY_CHARS = 800
 // Reads the transcript's whole tree, the branches a rewind left included: a
 // record naming the prompt the conversation stands at (`H owner`), then one
-// per prompt the person typed (`T uuid parent timestamp end text reply`). Each
-// row belongs to the nearest prompt above it, so `parent` is the prompt whose
-// turn this one was asked after, `end` the last row of the prompt's own turn,
-// and `reply` the opening of that turn's last text. The conversation stands
-// where the newest row is, or at the leaf a `last-prompt` record after it
-// names (a rewind writes one). A compacted row's parent is the row it summed
-// up; a subagent's rows are left out.
+// per prompt the person typed (`T uuid parent timestamp end cmds files tool git
+// text reply`). Each row belongs to the nearest prompt above it, so `parent` is
+// the prompt whose turn this one was asked after, `end` the last row of the
+// prompt's own turn, and `reply` the opening of that turn's last text. `cmds`
+// counts the turn's shell commands, `files` the files it changed, `tool` names
+// another tool it used, and `git` is 2 where a command pushed, 1 where one
+// committed. The conversation stands where the newest row is, or at the leaf a
+// `last-prompt` record after it names (a rewind writes one). A compacted row's
+// parent is the row it summed up; a subagent's rows are left out.
 const TREE_SCAN = `
 function field(key,   start, rest) {
   if (!(start = index($0, key))) return ""
   rest = substr($0, start + length(key))
+  return substr(rest, 1, index(rest, "\\"") - 1)
+}
+function after(text, key,   start, rest) {
+  if (!(start = index(text, key))) return ""
+  rest = substr(text, start + length(key))
   return substr(rest, 1, index(rest, "\\"") - 1)
 }
 function opening(key, size,   start, text) {
@@ -109,6 +120,18 @@ index($0, "{\\"parentUuid\\":") == 1 {
   if (index($0, "\\"type\\":\\"assistant\\",\\"uuid\\":\\"")) {
     text = opening("\\"type\\":\\"text\\",\\"text\\":\\"", ${REPLY_CHARS})
     if (text != "") said[id] = text
+    if (start = index($0, "\\"type\\":\\"tool_use\\"")) {
+      call = substr($0, start)
+      used[id] = after(call, "\\"name\\":\\"")
+      if (used[id] ~ /^(Edit|Write|NotebookEdit)$/) {
+        touched[id] = after(call, "\\"file_path\\":\\"")
+        if (touched[id] == "") touched[id] = after(call, "\\"notebook_path\\":\\"")
+      }
+      if (used[id] ~ /^(Bash|PowerShell)$/) {
+        if (index(call, "git push") || index(call, "gt submit")) git[id] = 2
+        else if (index(call, "git commit")) git[id] = 1
+      }
+    }
     next
   }
   if (!index($0, "\\"origin\\":{\\"kind\\":\\"human\\"}") && !index($0, "\\"origin\\":{\\"kind\\":\\"bridge\\"}")) next
@@ -133,17 +156,28 @@ END {
     if (found == "") continue
     end[found] = rows[i]
     if (rows[i] in said) reply[found] = said[rows[i]]
+    if (!(rows[i] in used)) continue
+    name = used[rows[i]]
+    if (git[rows[i]] > made[found]) made[found] = git[rows[i]]
+    if (name ~ /^(Bash|PowerShell)$/) cmds[found]++
+    else if (rows[i] in touched) {
+      if (!((found, touched[rows[i]]) in seen)) files[found]++
+      seen[found, touched[rows[i]]] = 1
+    }
+    else if (name !~ /^(Read|Grep|Glob|LS|TodoWrite|ToolSearch|Skill)$/) tool[found] = name
   }
   print "H\\t" owner((leafLine > lastLine && (leaf in up)) ? leaf : last)
   for (i = (n > ${MAX_ENTRIES}) ? n - ${MAX_ENTRIES} + 1 : 1; i <= n; i++) {
     id = prompt[i]
-    print "T\\t" id "\\t" owner(up[id]) "\\t" at[i] "\\t" end[id] "\\t" body[i] "\\t" reply[id]
+    print "T\\t" id "\\t" owner(up[id]) "\\t" at[i] "\\t" end[id] "\\t" (cmds[id] + 0) "\\t" (files[id] + 0) "\\t" tool[id] "\\t" (made[id] + 0) "\\t" body[i] "\\t" reply[id]
   }
 }`
 // The most of a turn's last reply its card shows.
 const REPLY = 320
-// What a card's switch button's key opens with, before the prompt's id.
+// What a card's switch button's key opens with, before the prompt's id, and
+// what the button says.
 const SWITCH = 'switch:'
+const CONTINUE = ' ↪ continue here '
 // What a card's copy button's key opens with, before the prompt's id: it
 // copies the `/resume-at` command that opens the session at that turn.
 const COPY = 'copy:'
@@ -153,9 +187,26 @@ const COPY = 'copy:'
 const COPY_SCAN = `index($0, "\\"uuid\\":\\"") { gsub(from, to); print > dst }`
 const RESUME_AT_USAGE =
   'Usage: /resume-at [--copy] <session-id>:<message-id>, or /resume-at <message-id> for this session.'
-// The mark of a prompt on a branch a rewind left: the conversation's own
-// prompts show their turn number in its place.
-const OFF = '○'
+// Each prompt's dot on its line: where the conversation stands, a prompt it
+// passes through, and one on a branch a rewind left.
+const DOTS = { here: '◉', path: '●', off: '○' } as const
+// The line the conversation runs down is the accent; every other branch takes
+// the next of these, so a branch keeps its colour however deep it sits. Theme
+// keys, so the lines follow the person's theme.
+const PATH = -1
+const TONES = ['merged', 'planMode', 'bashBorder', 'ide', 'success', 'warning']
+// The width of what a tree row ends with: what the turn did, then when it was
+// asked ("◂ here" on the row the conversation stands at).
+const OUTCOME_COLUMNS = 11
+const AT_COLUMNS = 6
+// How many lines of its last reply an opened card shows.
+const REPLY_LINES = 4
+// Behind the row the conversation stands at, and an opened card: the theme's
+// own shade behind the person's messages.
+const HIGHLIGHT = 'userMessageBackground'
+// The tree's last row copies the command that opens the session where it
+// stands.
+const COPY_HERE = 'copy-here'
 
 // What the search field's key opens with: the one element the focus ring may
 // rest on.
@@ -185,7 +236,9 @@ const tick = atom({ plugin: 'prompt-timeline', key: 'tick' } as const, 0)
 const field = atom({ plugin: 'prompt-timeline', key: 'field' } as const, '')
 const found = atom({ plugin: 'prompt-timeline', key: 'found' } as const, NOTHING_FOUND)
 const isTree = atom({ plugin: 'prompt-timeline', key: 'isTree' } as const, false)
-const tree = atom({ plugin: 'prompt-timeline', key: 'tree' } as const, [])
+// Shaped: a tree an earlier version laid out reads as empty until it is read
+// again, never as rows of the old shape.
+const tree = atom({ plugin: 'prompt-timeline', key: 'tree' } as const, [], { shape: 'tree-2' })
 // The prompt on an abandoned branch whose card is open, or ''.
 const opened = atom({ plugin: 'prompt-timeline', key: 'opened' } as const, '')
 
@@ -203,7 +256,7 @@ let searches = 0
 // Each prompt of the tree as the scan read it, by id: the turn's last row and
 // last reply stay here, out of `$.state`, for the cards and the switch. A
 // reload loses it and the scan at load reads it again.
-type Turn = { id: string; parent: string; at: number; end: string; text: string; reply: string }
+type Turn = { id: string; parent: string; at: number; end: string; text: string; reply: string; outcome: Outcome }
 let turns = new Map<string, Turn>()
 // The transcript's size when the tree was last read: a scan that would read
 // the same bytes is skipped. And a count of scans asked, so one that finishes
@@ -530,11 +583,59 @@ async function jump($: EngineInterface, id: string) {
   if (moved.deny !== undefined) $.ui.toast(`Couldn't scroll to that prompt: ${moved.deny}`)
 }
 
-// The tree drawn as lanes, top down, each prompt below the one it was asked
-// after. At every split the newest branch carries on down the lane and older
-// ones stick out one lane to the right, each drawn whole before the lane goes
-// on. Where the conversation stands decides only which rows are numbered and
-// which lines are lit, so a switch moves nothing; a new branch takes its lane.
+// What a turn did, by what most deserves its row: a push, a commit, the files
+// it changed, another tool it used, the commands it ran, or a reply alone.
+function outcomeOf(cmds: number, files: number, tool: string, git: number, reply: string): Outcome {
+  if (git === 2) return { label: '⇡ pushed', kind: 'push' }
+  if (git === 1) return { label: '● committed', kind: 'commit' }
+  if (files > 0) return { label: `✎ ${files} file${files === 1 ? '' : 's'}`, kind: 'files' }
+  if (tool !== '') return { label: `◇ ${tool.replace(/^mcp__.*__/, '')}`, kind: 'tool' }
+  if (cmds > 0) return { label: `› ${cmds} cmd${cmds === 1 ? '' : 's'}`, kind: 'cmds' }
+
+  return reply === '' ? { label: 'no reply', kind: 'none' } : { label: 'reply', kind: 'reply' }
+}
+
+// A line's colour, by its tone.
+function toneColor(tone: number): string {
+  return tone === PATH ? ACCENT : TONES[tone % TONES.length]!
+}
+
+// When a prompt was sent: its time today, its date before.
+function sentAt(at: number, now: number): string {
+  if (at === 0) return ''
+  const date = new Date(at)
+  if (date.toDateString() !== new Date(now).toDateString()) {
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
+
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+// A text in lines of at most `room` columns, broken between words, the last
+// of `most` lines cut short with an ellipsis where more was left.
+function wrap(text: string, room: number, most: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(one => one !== '')) {
+    if (line !== '' && line.length + 1 + word.length > room) {
+      lines.push(line)
+      line = ''
+    }
+    line = line === '' ? cut(word, room) : `${line} ${word}`
+  }
+  if (line !== '') lines.push(line)
+  if (lines.length <= most) return lines
+
+  return [...lines.slice(0, most - 1), cut(`${lines[most - 1]} …`, room)]
+}
+
+// The tree drawn as lanes, top down, each prompt a dot on its branch's line,
+// below the one it was asked after. At every split the newest branch carries
+// on down the lane and older ones fork off one lane to the right, each drawn
+// whole before the lane goes on. A row of lines sits between every two
+// prompts: it carries each line on, or forks a branch off (`├─╮`). Where the
+// conversation stands decides only which dots are lit and which lines are the
+// accent, so a switch moves nothing; a new branch takes its lane.
 function layout(list: Turn[], here: string): TreeNode[] {
   const byId = new Map(list.map(turn => [turn.id, turn]))
   const roots: Turn[] = []
@@ -551,36 +652,61 @@ function layout(list: Turn[], here: string): TreeNode[] {
   for (let id = here; byId.has(id) && !path.has(id); id = byId.get(id)!.parent) path.add(id)
 
   const nodes: TreeNode[] = []
-  // Draws a branch from its first prompt, right of `lanes`: every lane left of
-  // it goes on below, lit when the path runs on down it. Its first row forks
-  // from the lane left of it.
-  const draw = (first: Turn, depth: number, lanes: boolean[], fork: TreeLine[]) => {
+  let branches = 0
+  // Draws a branch from its first prompt, right of `lanes`, each the tone its
+  // line goes on below in. Its first row forks from the lane left of it, in
+  // the `fork` tone.
+  const draw = (first: Turn, depth: number, lanes: number[], fork: number | undefined) => {
+    const branch = branches++
+    const beside = lanes.map(tone => ({ text: '│ ', tone }))
+    const own: TreeNode[] = []
     let turn: Turn | undefined = first
-    for (let row = 0; turn !== undefined; row++, depth++) {
-      const gutter = lanes.flatMap((isPath, lane) =>
-        row === 0 && lane === lanes.length - 1 ? fork : [{ text: '│ ', isPath }],
-      )
+    for (; turn !== undefined; depth++) {
       const place = turn.id === here ? 'here' : path.has(turn.id) ? 'path' : 'off'
-      nodes.push({ id: turn.id, text: turn.text, at: turn.at, depth, gutter, place })
+      const tone = place === 'off' ? branch : PATH
+      const above =
+        own.length > 0
+          ? [...beside, { text: '│', tone }]
+          : fork === undefined
+            ? []
+            : [...beside.slice(0, -1), { text: '├', tone: fork }, { text: '─╮', tone }]
+      const node: TreeNode = {
+        id: turn.id,
+        text: turn.text,
+        at: turn.at,
+        depth,
+        lane: lanes.length,
+        above,
+        cells: [...beside, { text: DOTS[place], tone }],
+        tone,
+        place,
+        outcome: turn.outcome,
+      }
+      nodes.push(node)
+      own.push(node)
 
       const next: Turn[] = children.get(turn.id) ?? []
       const sides = next.slice(0, -1)
       const onward: Turn | undefined = next[next.length - 1]
       sides.forEach((side, index) => {
-        const isSidePath = path.has(side.id)
         // The path runs on down this lane past the branch to the onward
         // prompt or to a later branch.
         const leadsOn = [onward!, ...sides.slice(index + 1)].some(later => path.has(later.id))
-        const forkLines = [
-          { text: '├', isPath: isSidePath || leadsOn },
-          { text: '─', isPath: isSidePath },
-        ]
-        draw(side, depth + 1, [...lanes, leadsOn], forkLines)
+        const lane = leadsOn ? PATH : branch
+        draw(side, depth + 1, [...lanes, lane], path.has(side.id) ? PATH : lane)
       })
       turn = onward
     }
+
+    // The path runs down the start of a branch, if at all: the rest of it is a
+    // branch the conversation left, and its first row says how long it is.
+    const left = own.filter(node => node.place === 'off')
+    if (left[0] !== undefined) {
+      const isUnanswered = left.length === 1 && left[0].outcome.kind === 'none'
+      left[0].chip = isUnanswered ? 'no reply' : `${left.length} turn${left.length === 1 ? '' : 's'}`
+    }
   }
-  for (const root of roots) draw(root, 1, [], [])
+  for (const root of roots) draw(root, 1, [], undefined)
 
   return nodes
 }
@@ -600,16 +726,21 @@ async function grow($: EngineInterface, isForced = false): Promise<void> {
   let here = ''
   const list: Turn[] = []
   for (const record of scan.stdout.split('\n')) {
-    const [kind, id = '', parent = '', timestamp = '', end = '', text = '', reply = ''] = record.split('\t')
+    const [kind, id = '', parent = '', timestamp = '', end = '', cmds = '', files = '', tool = '', git = '', text = '', reply = ''] =
+      record.split('\t')
     if (kind === 'H') here = id
     if (kind !== 'T' || id === '') continue
+    // A turn with no text has no reply to decode, not one cut short.
+    const said = reply === '' ? '' : cut(flatten(decode(reply)), REPLY)
     list.push({
       id,
       parent,
       at: Date.parse(timestamp) || 0,
       end,
-      text: preview(decode(text)),
-      reply: cut(flatten(decode(reply)), REPLY),
+      // A pasted image is a mark, not its placeholder's words.
+      text: preview(decode(text)).replace(/\[Image #\d+\]/g, '▣'),
+      reply: said,
+      outcome: outcomeOf(Number(cmds) || 0, Number(files) || 0, tool, Number(git) || 0, said),
     })
   }
   grownAt = size
@@ -774,7 +905,7 @@ async function openElsewhere(
 async function promptEndingAt($: EngineInterface, path: string, leaf: string): Promise<string> {
   const scan = await $.process.run(['awk', TREE_SCAN, path])
   for (const record of scan.stdout.split('\n')) {
-    const [kind, , , , end = '', text = ''] = record.split('\t')
+    const [kind, , , , end = '', , , , , text = ''] = record.split('\t')
     if (kind === 'T' && end === leaf) return preview(decode(text))
   }
 
@@ -1050,12 +1181,35 @@ export const register: Register = on => {
     const room = width - digits - 2 - right - 2
     const isFiltered = isSearchShown && results.query !== ''
 
+    // The tree counts the turns to where the conversation stands, and the
+    // branches beside them: one for each fork.
+    const here = nodes.find(node => node.place === 'here')
+    const forks = nodes.filter(node => node.above.at(-1)?.text === '─╮').length
     // As the dock narrows the title gives way first, then the count.
-    const count = isFiltered
-      ? `${results.total} of ${list.length}`
-      : `${list.length} prompt${list.length === 1 ? '' : 's'}`
-    const isNamed = width >= TITLE_COLUMNS + CONTROL_COLUMNS + 2 + count.length
-    const isCounted = width >= (isNamed ? TITLE_COLUMNS : 1) + CONTROL_COLUMNS + 2 + count.length
+    const count =
+      isTreeShown && here !== undefined
+        ? `${here.depth} turn${here.depth === 1 ? '' : 's'} · ${forks} branch${forks === 1 ? '' : 'es'}`
+        : isFiltered
+          ? `${results.total} of ${list.length}`
+          : `${list.length} prompt${list.length === 1 ? '' : 's'}`
+    const controls = SWITCH_COLUMNS + FIND_COLUMNS + (isTreeShown ? 0 : CONTEXT_TOGGLE_COLUMNS)
+    const isNamed = width >= TITLE_COLUMNS + controls + 2 + count.length
+    const isCounted = width >= (isNamed ? TITLE_COLUMNS : 1) + controls + 2 + count.length
+    // The list and the tree, side by side: the one shown filled in the accent,
+    // the other on the theme's shade, so the pair reads as one switch.
+    const view = (name: 'list' | 'tree', key: string) => {
+      const isOn = (name === 'tree') === isTreeShown
+
+      return (
+        <Button key={key} plain onPress={() => (isOn ? undefined : toggleTree($))}>
+          <Text
+            {...(isOn
+              ? { backgroundColor: ACCENT, color: 'inverseText', bold: true }
+              : { backgroundColor: HIGHLIGHT, dimColor: true })}
+          >{` ${name} `}</Text>
+        </Button>
+      )
+    }
     const header = (
       <Box flexDirection="column" marginBottom={1}>
         <Box justifyContent="space-between" height={1} overflow="hidden">
@@ -1063,11 +1217,16 @@ export const register: Register = on => {
             <Text color={ACCENT}>{isNamed ? '◆ ' : '◆'}</Text>
             {isNamed && <Text bold>Timeline</Text>}
             <Text>{'  '}</Text>
-            <Button key="context" plain onPress={() => toggleContext($)}>
-              <Text color={isContextShown ? ACCENT : undefined} dimColor={!isContextShown}>
-                {isContextShown ? '● ctx' : '○ ctx'}
-              </Text>
-            </Button>
+            {view('list', 'list-view')}
+            {view('tree', 'tree-toggle')}
+            {!isTreeShown && <Text>{'  '}</Text>}
+            {!isTreeShown && (
+              <Button key="context" plain onPress={() => toggleContext($)}>
+                <Text color={isContextShown ? ACCENT : undefined} dimColor={!isContextShown}>
+                  {isContextShown ? '● ctx' : '○ ctx'}
+                </Text>
+              </Button>
+            )}
             {Input !== undefined && <Text>{'  '}</Text>}
             {Input !== undefined && (
               <Button key="search-toggle" plain onPress={() => toggleSearch($)}>
@@ -1076,12 +1235,6 @@ export const register: Register = on => {
                 </Text>
               </Button>
             )}
-            <Text>{'  '}</Text>
-            <Button key="tree-toggle" plain onPress={() => toggleTree($)}>
-              <Text color={isTreeShown ? ACCENT : undefined} dimColor={!isTreeShown}>
-                {isTreeShown ? '● tree' : '○ tree'}
-              </Text>
-            </Button>
           </Box>
           {isCounted && <Text dimColor>{count}</Text>}
         </Box>
@@ -1119,74 +1272,149 @@ export const register: Register = on => {
         const key = pressed.element
         if (key.startsWith(SWITCH)) return switchTo($, key.slice(SWITCH.length))
         if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length))
+        if (key === COPY_HERE) return here === undefined ? undefined : copyResume($, here.id)
 
         return pick($, key)
       }
 
+      const lines = (cells: TreeLine[]) =>
+        cells.map(cell => <Text color={toneColor(cell.tone)}>{cell.text}</Text>)
+      // Beside an opened card the lines carry on as they do into the row
+      // below, a fork there not yet begun.
+      const through = (cells: TreeLine[]) =>
+        cells.map(cell => (cell.text === '├' ? { ...cell, text: '│' } : cell.text === '─╮' ? { ...cell, text: '  ' } : cell))
+      const columns = (cells: TreeLine[]) => cells.reduce((sum, cell) => sum + cell.text.length, 0)
+
+      // A card under a prompt: on a branch the conversation left, its last
+      // reply and the switch to it; on the conversation, the command alone, as
+      // the transcript shows the reply. Each row keeps the lines beside it.
+      const card = (node: TreeNode, below: TreeNode | undefined) => {
+        const turn = turns.get(node.id)
+        const side = through(below?.above ?? [])
+        const indent = columns(node.cells) + String(node.depth).length + 2
+        const pad = ' '.repeat(Math.max(0, indent - columns(side)))
+        const isOff = node.place === 'off'
+        const said = isOff ? wrap(turn?.reply || 'No reply in the transcript.', Math.max(12, width - indent - 2), REPLY_LINES) : []
+        const row = (content: RenderChildren) => (
+          <Box height={1} overflow="hidden">
+            {lines(side)}
+            <Text>{pad}</Text>
+            <Box flexGrow={1} backgroundColor={HIGHLIGHT} paddingX={1}>
+              {content}
+            </Box>
+          </Box>
+        )
+
+        // The switch is a pill in the branch's colour; the copy sits beside it
+        // where the card has room for both, under it where it has not.
+        const end = turn?.end ?? ''
+        const copy = `⧉ copy /resume-at …:${end.slice(0, 8)}`
+        const resume = (
+          <Button key={`${SWITCH}${node.id}`} plain onPress={pressTree}>
+            <Text backgroundColor={toneColor(node.tone)} color="inverseText" bold>
+              {CONTINUE}
+            </Text>
+          </Button>
+        )
+        const copier = (
+          <Button key={`${COPY}${node.id}`} plain onPress={pressTree}>
+            <Text color="suggestion">{copy}</Text>
+          </Button>
+        )
+        const isSideBySide = width - indent - 2 >= CONTINUE.length + 3 + copy.length
+
+        return [
+          ...said.map(line => row(<Text dimColor italic>{line}</Text>)),
+          isOff && end !== '' && isSideBySide && row([resume, <Text>{'   '}</Text>, copier]),
+          isOff && !(end !== '' && isSideBySide) && row(resume),
+          end !== '' && !(isOff && isSideBySide) && row(copier),
+        ]
+      }
+
+      // Where the conversation stands: on the line the tree starts down, or on
+      // a branch it took at a turn.
+      const left = nodes.find(node => node.place !== 'off' && node.lane > 0)
+      const where = left === undefined ? 'on the main line' : `on a branch from turn ${left.depth - 1}`
+      const context = await $.session
+        .usage()
+        .then(usage => usage.context.percent)
+        .catch(() => undefined)
+
       return (
         <Box flexDirection="column" paddingLeft={1}>
           {header}
-          {nodes.map(node => {
+          {nodes.map((node, index) => {
             const isOff = node.place === 'off'
             const isHere = node.place === 'here'
-            const tone = isHere ? { color: ACCENT, bold: true } : isOff ? { dimColor: true } : {}
-            // The conversation's prompts show their turn number, as the
-            // transcript counts them, where the mark would be.
-            const mark = `${isOff ? OFF : node.depth} `
-            const indent = node.gutter.reduce((columns, line) => columns + line.text.length, 0)
-            // The age, or where the session stands, gives way to the prompt
-            // where a deep branch leaves little room.
-            const space = width - indent - mark.length
-            const isAged = space - AGE_COLUMNS - 2 >= 12
-            const turn = turns.get(node.id)
+            // What the turn did, and when it was asked, give way to the
+            // prompt where a deep branch leaves little room.
+            const space = width - columns(node.cells) - String(node.depth).length - 2
+            const isTimed = space - AT_COLUMNS - 2 >= 12
+            const isTold = isTimed && space - AT_COLUMNS - OUTCOME_COLUMNS - 4 >= 12
+            const room = space - (isTimed ? AT_COLUMNS + 2 : 0) - (isTold ? OUTCOME_COLUMNS + 2 : 0)
+            const kind = node.outcome.kind
 
             return (
               <Box flexDirection="column">
-                <Box justifyContent="space-between" height={1} overflow="hidden">
+                {/* Between two prompts, a row of the lines running on. */}
+                {index > 0 && <Box height={1}>{node.above.length > 0 ? lines(node.above) : <Text> </Text>}</Box>}
+                <Box
+                  justifyContent="space-between"
+                  height={1}
+                  overflow="hidden"
+                  backgroundColor={isHere ? HIGHLIGHT : undefined}
+                >
                   <Button key={node.id} plain onPress={pressTree}>
-                    {node.gutter.map(line => (
-                      <Text {...(line.isPath ? { color: ACCENT } : { dimColor: true })}>{line.text}</Text>
-                    ))}
-                    <Text {...tone}>{mark}</Text>
-                    <Text {...tone}>{cut(node.text, isAged ? space - AGE_COLUMNS - 2 : space)}</Text>
+                    {lines(node.cells)}
+                    <Text
+                      {...(isHere ? { bold: true } : isOff ? { color: toneColor(node.tone) } : { dimColor: true })}
+                    >{` ${node.depth} `}</Text>
+                    <Text bold={isHere}>{cut(node.text, room)}</Text>
                   </Button>
-                  {isAged &&
-                    (isHere ? (
-                      <Text {...tone}>{`  ${'← here'.padStart(AGE_COLUMNS)}`}</Text>
-                    ) : (
-                      <Text dimColor wrap="truncate">
-                        {`  ${age(node.at, now).padStart(AGE_COLUMNS)}`}
+                  <Box>
+                    {isTold && (
+                      <Text
+                        {...(node.chip !== undefined
+                          ? { color: toneColor(node.tone) }
+                          : kind === 'push' || kind === 'commit'
+                            ? { color: 'warning' }
+                            : kind === 'files'
+                              ? { color: 'success' }
+                              : kind === 'tool'
+                                ? { color: 'suggestion' }
+                                : { dimColor: true })}
+                      >
+                        {`  ${cut(node.chip ?? node.outcome.label, OUTCOME_COLUMNS).padStart(OUTCOME_COLUMNS)}`}
                       </Text>
-                    ))}
-                </Box>
-                {node.id === openedId && (
-                  <Box
-                    flexDirection="column"
-                    marginLeft={indent}
-                    borderStyle="round"
-                    borderDimColor
-                    paddingX={1}
-                  >
-                    {/* The transcript already shows a reply on the conversation. */}
-                    {isOff && <Text dimColor>{turn?.reply || 'No reply in the transcript.'}</Text>}
-                    {/* The buttons stand apart from the reply, each in a colour of its own. */}
-                    <Box flexDirection="column" marginTop={isOff ? 1 : 0}>
-                      {isOff && (
-                        <Button key={`${SWITCH}${node.id}`} plain onPress={pressTree}>
-                          <Text color={ACCENT}>↪ continue from here</Text>
-                        </Button>
-                      )}
-                      {turn !== undefined && turn.end !== '' && (
-                        <Button key={`${COPY}${node.id}`} plain onPress={pressTree}>
-                          <Text color="suggestion">{`⧉ copy /resume-at …:${turn.end.slice(0, 8)}`}</Text>
-                        </Button>
-                      )}
-                    </Box>
+                    )}
+                    {isTimed &&
+                      (isHere ? (
+                        <Text color={ACCENT} bold>{`  ${'◂ here'.padStart(AT_COLUMNS)}`}</Text>
+                      ) : (
+                        <Text dimColor>{`  ${sentAt(node.at, now).padStart(AT_COLUMNS)}`}</Text>
+                      ))}
                   </Box>
-                )}
+                </Box>
+                {node.id === openedId && card(node, nodes[index + 1])}
               </Box>
             )
           })}
+          {here !== undefined && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text dimColor wrap="truncate">
+                {'─'.repeat(width)}
+              </Text>
+              <Box justifyContent="space-between" height={1} overflow="hidden">
+                <Text wrap="truncate">
+                  <Text color={ACCENT}>◉</Text>
+                  <Text dimColor>{` turn ${here.depth} · ${where}${context === undefined ? '' : ` · ${context}% ctx`}`}</Text>
+                </Text>
+                <Button key={COPY_HERE} plain onPress={pressTree}>
+                  <Text color="suggestion">⧉ copy /resume-at</Text>
+                </Button>
+              </Box>
+            </Box>
+          )}
         </Box>
       )
     }

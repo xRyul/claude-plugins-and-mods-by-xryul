@@ -15,8 +15,8 @@ const MESSAGES: Record<string, string[]> = {
 // The tree scan's records: d's turn ends at D_END, f's at F_END.
 const SCAN = [
   'H\tf',
-  `T\td\tc\t2026-10-20T13:03:00Z\t${D_END}\tfourth"\tfourth reply"`,
-  `T\tf\te\t2026-10-20T13:05:00Z\t${F_END}\tsixth"\tsixth reply"`,
+  `T\td\tc\t2026-10-20T13:03:00Z\t${D_END}\t0\t0\t\t0\tfourth"\tfourth reply"`,
+  `T\tf\te\t2026-10-20T13:05:00Z\t${F_END}\t0\t0\t\t0\tsixth"\tsixth reply"`,
 ]
 
 // The engine beneath the plugin: transcripts for this session (s1) and one
