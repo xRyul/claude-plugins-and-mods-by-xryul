@@ -434,3 +434,31 @@ test('a resumed session frames the final reply of each earlier turn', async ($, 
   expect(await mountReply($, 'Second answer.')).toContain('"borderStyle":"round"')
   expect(await mountReply($, 'Looking.')).not.toContain('borderStyle')
 })
+
+test('a session resumed in place, as the timeline jumps, frames its final replies', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let messages: SessionMessage[] = [
+    { role: 'user', text: 'first', toolUses: [] },
+    { role: 'assistant', text: 'Answer before the jump.', toolUses: [] },
+  ]
+  on('session.messages', () => ({ value: messages }))
+  on('session.start', () => ({ cwd: '/p' }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
+
+  // No session.start follows a resume, and the new transcript lands a moment after it ends
+  await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
+  await clock.advance(250)
+  messages = [
+    { role: 'user', text: 'other', toolUses: [] },
+    { role: 'assistant', text: 'Checking.', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r1', tool: 'Read', input: { file_path: '/p/a.ts' } }] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'r1', text: 'ok', isError: false }] },
+    { role: 'assistant', text: 'Answer on the other branch.', toolUses: [] },
+  ]
+  await clock.advance(250)
+
+  expect(await mountReply($, 'Answer on the other branch.')).toContain('"borderStyle":"round"')
+  expect(await mountReply($, 'Checking.')).not.toContain('borderStyle')
+  expect(await mountReply($, 'Answer before the jump.')).not.toContain('borderStyle')
+})

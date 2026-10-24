@@ -131,6 +131,23 @@ function findFinalReplies(messages: ReadonlyArray<SessionMessage>) {
     .slice(-500)
 }
 
+// A transcript told apart cheaply: by its length and its last message
+function transcriptKey(messages: ReadonlyArray<SessionMessage>) {
+  return `${messages.length}:${replyKey(messages[messages.length - 1]?.text ?? '')}`
+}
+
+// Reads the transcript a resume put in place once it differs from the one before: checked
+// every quarter second, and read anyway after five seconds
+async function readResumed($: EngineInterface, before: string, tries = 20): Promise<void> {
+  const messages = await $.session.messages()
+  if (transcriptKey(messages) === before && tries > 1) {
+    $.clock.after(250, () => void readResumed($, before, tries - 1).catch(() => undefined))
+    return
+  }
+  await update($, fileRuns, () => findFileRuns(messages))
+  await update($, finalReplies, () => findFinalReplies(messages))
+}
+
 type Span = {
   text: string
   code?: boolean
@@ -624,6 +641,17 @@ export const register: Register = on => {
     await update($, finalReplies, () => findFinalReplies(messages))
 
     return started
+  })
+
+  // A resume swaps the transcript in place with no session.start after it, so its final
+  // replies are read again. The timeline's /resume-at and branch switches are resumes too
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'resume') return next(e)
+
+    const before = transcriptKey(await $.session.messages())
+    $.clock.after(250, () => void readResumed($, before).catch(() => undefined))
+
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {

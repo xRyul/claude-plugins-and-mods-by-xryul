@@ -1,6 +1,6 @@
 {
   "name": "dracula-theme-mod",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Dracula transcript styling: tool call cards, coloured status lines, inline code pills and no dots",
   "author": { "name": "xRyul" },
   "license": "MIT",
