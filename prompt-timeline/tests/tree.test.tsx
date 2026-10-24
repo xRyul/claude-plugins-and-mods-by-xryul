@@ -417,16 +417,48 @@ test("a resume that does not take leaves the branch saved and says how to open i
   await ui.unmount()
 })
 
-test('find leaves the tree for the list', async ($, on) => {
-  const { clock } = engine(on)
+test('find searches the tree in place, lighting each match and dimming the rest', async ($, on) => {
+  const { clock } = engine(on, undefined, SCAN, { prompts: PROMPTS })
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   await clock.settle()
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
   await ui.press({ key: 'search-toggle' })
-
-  expect((await ui.find({ type: 'Text', text: ' list ' }))?.props).toEqual(
+  expect((await ui.find({ type: 'Text', text: ' tree ' }))?.props).toEqual(
     expect.objectContaining({ backgroundColor: 'claude' }),
   )
-  expect(await rows(ui)).toEqual([])
+
+  const field = (await ui.find({ type: 'Input' }))?.key as string
+  await ui.input({ key: field, text: 'fi' })
+  // Every row stays where it was: a and e matched.
+  expect(await rows(ui)).toEqual([
+    '● 1 first',
+    '● 2 second',
+    '│ ○ 3 third',
+    '│ ○ 4 fourth',
+    '● 3 fifth',
+    '◉ 4 sixth',
+  ])
+  expect((await ui.findAll({ type: 'Text', text: /^fi$/ })).map(match => match.props)).toEqual([
+    { color: 'warning', bold: true },
+    { color: 'warning', bold: true },
+  ])
+  expect((await ui.find({ type: 'Text', text: 'second' }))?.props).toEqual({ dimColor: true })
+  expect((await ui.find({ type: 'Text', text: 'sixth' }))?.props).toEqual({ dimColor: true })
+  expect(await ui.find({ type: 'Text', text: '2 of 6' })).toBeDefined()
+
+  // The search stays open across the switch: the list shows the matches alone.
+  await ui.press({ key: 'list-view' })
+  expect(await rows(ui)).toEqual(['5  fifth', '1  first'])
+  await ui.press({ key: 'tree-toggle' })
+  expect((await ui.find({ type: 'Input' }))?.key).toBe(field)
+  expect(await rows(ui)).toHaveLength(6)
+
+  await ui.input({ key: field, text: 'nothing like it' })
+  expect(await ui.find({ type: 'Text', text: /No prompt holds that/ })).toBeDefined()
+
+  // Closed, the tree is lit whole again.
+  await ui.press({ key: 'search-toggle' })
+  expect((await ui.find({ type: 'Text', text: 'sixth' }))?.props).toEqual({ bold: true })
+  expect(await ui.find({ type: 'Text', text: '4 turns · 1 branch' })).toBeDefined()
   await ui.unmount()
 })

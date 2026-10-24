@@ -239,8 +239,7 @@ const tick = atom({ plugin: 'prompt-timeline', key: 'tick' } as const, 0)
 // time it opens is a new, empty field.
 const field = atom({ plugin: 'prompt-timeline', key: 'field' } as const, '')
 const found = atom({ plugin: 'prompt-timeline', key: 'found' } as const, NOTHING_FOUND)
-// The pane opens on the tree. The list, chosen or left for by a search, lasts
-// the session.
+// The pane opens on the tree. The list, once chosen, lasts the session.
 const isTree = atom({ plugin: 'prompt-timeline', key: 'isTree' } as const, true)
 // Shaped: a tree an earlier version laid out reads as empty until it is read
 // again, never as rows of the old shape.
@@ -548,9 +547,6 @@ async function toggleSearch($: EngineInterface) {
   await update($, field, () => key)
   if (key === '') return
 
-  // The search filters the list: leave the tree for it.
-  await update($, isTree, () => false)
-
   // The field sits at the top: scroll it into view. A press leaves the keys
   // with the prompt, so the pane asks for them (granted over an empty prompt),
   // and the ring goes to the field.
@@ -772,13 +768,13 @@ async function regrow($: EngineInterface) {
 
 async function toggleTree($: EngineInterface) {
   const isShown = !(await read($, isTree))
-  await closeSearch($)
   await update($, opened, () => '')
   await update($, isTree, () => isShown)
   if (!isShown) return
 
   await grow($).catch(() => undefined)
-  void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
+  // A search stays open across the switch, its field at the top in view.
+  if ((await read($, field)) === '') void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
 }
 
 // A press opens the prompt's card, or closes it. A prompt the conversation
@@ -1201,12 +1197,11 @@ export const register: Register = on => {
     const here = nodes.find(node => node.place === 'here')
     const forks = nodes.filter(node => node.above.at(-1)?.text === '─╮').length
     // As the dock narrows the title gives way first, then the count.
-    const count =
-      isTreeShown && here !== undefined
+    const count = isFiltered
+      ? `${results.total} of ${list.length}`
+      : isTreeShown && here !== undefined
         ? `${here.depth} turn${here.depth === 1 ? '' : 's'} · ${forks} branch${forks === 1 ? '' : 'es'}`
-        : isFiltered
-          ? `${results.total} of ${list.length}`
-          : `${list.length} prompt${list.length === 1 ? '' : 's'}`
+        : `${list.length} prompt${list.length === 1 ? '' : 's'}`
     const controls = SWITCH_COLUMNS + FIND_COLUMNS + CONTEXT_TOGGLE_COLUMNS
     const isNamed = width >= TITLE_COLUMNS + controls + 2 + count.length
     const isCounted = width >= (isNamed ? TITLE_COLUMNS : 1) + controls + 2 + count.length
@@ -1277,6 +1272,15 @@ export const register: Register = on => {
     if (e.props.view.agentId !== undefined) {
       return note("An agent's transcript", 'Switch back to the main one to jump.')
     }
+    if (isFiltered && results.total === 0) {
+      return note('No prompt holds that', 'Fewer or shorter words find more.')
+    }
+    // The matches drawn, by id, and the older ones left out.
+    const lit = new Map(isFiltered ? results.hits.map(hit => [hit.id, hit]) : [])
+    const more = isFiltered ? results.total - lit.size : 0
+    const narrow = more > 0 && (
+      <Text dimColor>{`   ${more} older match${more === 1 ? '' : 'es'}: add a word to narrow`}</Text>
+    )
 
     if (isTreeShown) {
       if (nodes.length === 0) return note('No prompts yet', 'Send one and it lands here.')
@@ -1380,6 +1384,10 @@ export const register: Register = on => {
               (isGauged ? CONTEXT_COLUMNS + 2 : 0)
             const kind = node.outcome.kind
             const percent = percents.get(node.id)
+            // While searching, a match is lit where it matched and the rest
+            // dim, so the tree keeps its shape.
+            const hit = lit.get(node.id)
+            const [before, match, after] = hit === undefined ? [] : fit(hit, room)
 
             return (
               <Box flexDirection="column">
@@ -1398,7 +1406,15 @@ export const register: Register = on => {
                     <Text
                       {...(isHere ? { bold: true } : isOff ? { color: toneColor(node.tone) } : { dimColor: true })}
                     >{` ${node.depth} `}</Text>
-                    <Text bold={isHere}>{cut(node.text, room)}</Text>
+                    {hit === undefined ? (
+                      <Text {...(isFiltered ? { dimColor: true } : { bold: isHere })}>{cut(node.text, room)}</Text>
+                    ) : (
+                      [
+                        before !== '' && <Text bold={isHere}>{before}</Text>,
+                        <Text color={MATCH} bold>{match}</Text>,
+                        after !== '' && <Text bold={isHere}>{after}</Text>,
+                      ]
+                    )}
                   </Button>
                   <Box>
                     {isTold && (
@@ -1433,6 +1449,7 @@ export const register: Register = on => {
               </Box>
             )
           })}
+          {narrow}
           {here !== undefined && (
             <Box flexDirection="column" marginTop={1}>
               <Text dimColor wrap="truncate">
@@ -1454,9 +1471,6 @@ export const register: Register = on => {
     }
 
     if (list.length === 0) return note('No prompts yet', 'Send one and it lands here.')
-    if (isFiltered && results.total === 0) {
-      return note('No prompt holds that', 'Fewer or shorter words find more.')
-    }
 
     // One handler for every entry: a press names its Button by key.
     const press = (pressed: UiPressArgument) => jump($, pressed.element)
@@ -1502,7 +1516,6 @@ export const register: Register = on => {
       // Matches newest first under the field, each by its place in the timeline.
       const place = new Map(list.map((entry, index) => [entry.id, index]))
       const shown = results.hits.filter(hit => place.has(hit.id))
-      const more = results.total - shown.length
 
       return (
         <Box flexDirection="column" paddingLeft={1}>
@@ -1512,9 +1525,7 @@ export const register: Register = on => {
 
             return row(list[at]!, at + 1, index === shown.length - 1 && more <= 0, hit)
           })}
-          {more > 0 && (
-            <Text dimColor>{`   ${more} older match${more === 1 ? '' : 'es'}: add a word to narrow`}</Text>
-          )}
+          {narrow}
         </Box>
       )
     }
