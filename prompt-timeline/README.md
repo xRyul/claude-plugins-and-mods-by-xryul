@@ -2,6 +2,8 @@
 
 A pane beside the chat that shows every prompt in the current session, as a tree of every branch a rewind left behind or as a list, with how much of the context window was in use and when you sent it.
 
+![The tree view, each part labelled: the branches a rewind left, what each turn did, its context use and when it was sent](docs/tree.svg)
+
 - Click a prompt to scroll the transcript to it.
 - Use list to see the prompts in the order you sent them, with how long ago, and ctx to show or hide the context column in both views.
 - The context column is grey while the window has room and turns yellow by 30%, orange by 50% and bright red at 100%, shading smoothly between them.

@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="770" viewBox="0 0 1200 770" role="img" aria-labelledby="title desc">
+<title id="title">prompt-timeline's tree view</title>
+<desc id="desc">The timeline pane on its tree: each prompt a numbered dot on its branch's line, then what its turn did, the context in use and when it was sent, with each part labelled.</desc>
+<style>
+.m{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:15px}
+.t{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;fill:#ededf2}
+.d{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;fill:#9ea2b5}
+.lead{fill:none;stroke:#b9bdcc;stroke-width:1.3}
+</style>
+<defs>
+<marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1L9 5L0 9z" fill="#b9bdcc"/></marker>
+<linearGradient id="ctx"><stop offset="0%" stop-color="#999999"/><stop offset="30%" stop-color="#ffff00"/><stop offset="50%" stop-color="#ff8c00"/><stop offset="100%" stop-color="#ff0000"/></linearGradient>
+</defs>
+<rect width="1200" height="770" rx="14" fill="#1b1c22"/>
+<rect x="300" y="100" width="600" height="500" rx="10" fill="#262626" stroke="#3d3f4c"/>
+<text x="316" y="132" class="m" fill="#d77757">◆</text>
+<text x="334" y="132" class="m" font-weight="700" fill="#e6e6e6">Timeline</text>
+<rect x="424" y="116" width="54" height="22" fill="#3a3c48"/>
+<text x="451" y="132" class="m" text-anchor="middle" fill="#8a8a8a">list</text>
+<rect x="478" y="116" width="54" height="22" fill="#d77757"/>
+<text x="505" y="132" class="m" text-anchor="middle" font-weight="700" fill="#1c1c1c">tree</text>
+<text x="550" y="132" class="m" fill="#d77757">● ctx</text>
+<text x="613" y="132" class="m" fill="#8a8a8a">○ find</text>
+<text x="884" y="132" class="m" text-anchor="end" fill="#8a8a8a">12 turns · 2 branches</text>
+<line x1="300" y1="150" x2="900" y2="150" stroke="#4a4a4a"/>
+<circle cx="320.5" cy="181" r="4" fill="#d77757"/>
+<text x="334" y="186" class="m" fill="#8a8a8a">1</text>
+<text x="352" y="186" class="m" fill="#e6e6e6">set up the project and run the…</text>
+<text x="758" y="186" class="m" text-anchor="end" fill="#8a8a8a">› 6 cmds</text>
+<text x="812" y="186" class="m" text-anchor="end" fill="#a7a785">4%</text>
+<text x="884" y="186" class="m" text-anchor="end" fill="#8a8a8a">09:12</text>
+<circle cx="320.5" cy="207" r="4" fill="#d77757"/>
+<text x="334" y="212" class="m" fill="#8a8a8a">2</text>
+<text x="352" y="212" class="m" fill="#e6e6e6">add a dark mode toggle to setti…</text>
+<text x="758" y="212" class="m" text-anchor="end" fill="#4eba65">✎ 3 files</text>
+<text x="812" y="212" class="m" text-anchor="end" fill="#b8b86b">9%</text>
+<text x="884" y="212" class="m" text-anchor="end" fill="#8a8a8a">09:20</text>
+<circle cx="320.5" cy="233" r="4" fill="#d77757"/>
+<text x="334" y="238" class="m" fill="#8a8a8a">3</text>
+<text x="352" y="238" class="m" fill="#e6e6e6">the toggle resets on reload</text>
+<text x="758" y="238" class="m" text-anchor="end" fill="#8a8a8a">› 2 cmds</text>
+<text x="812" y="238" class="m" text-anchor="end" fill="#c9c952">14%</text>
+<text x="884" y="238" class="m" text-anchor="end" fill="#8a8a8a">09:31</text>
+<path d="M320.5 246V298" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M320.5 259H333.5Q338.5 259 338.5 264V270" stroke="#4fa597" stroke-width="1.6" fill="none"/>
+<circle cx="338.5" cy="285" r="3.8" fill="none" stroke="#4fa597" stroke-width="1.5"/>
+<text x="352" y="290" class="m" fill="#4fa597">4</text>
+<text x="370" y="290" class="m" fill="#e6e6e6">keep it in a cookie instead</text>
+<text x="758" y="290" class="m" text-anchor="end" fill="#4fa597">no reply</text>
+<text x="812" y="290" class="m" text-anchor="end" fill="#d6d63d">18%</text>
+<text x="884" y="290" class="m" text-anchor="end" fill="#8a8a8a">09:38</text>
+<circle cx="320.5" cy="311" r="4" fill="#d77757"/>
+<text x="334" y="316" class="m" fill="#8a8a8a">4</text>
+<text x="352" y="316" class="m" fill="#e6e6e6">keep it in localStorage</text>
+<text x="758" y="316" class="m" text-anchor="end" fill="#4eba65">✎ 2 files</text>
+<text x="812" y="316" class="m" text-anchor="end" fill="#d6d63d">18%</text>
+<text x="884" y="316" class="m" text-anchor="end" fill="#8a8a8a">09:40</text>
+<circle cx="320.5" cy="337" r="4" fill="#d77757"/>
+<text x="334" y="342" class="m" fill="#8a8a8a">5</text>
+<text x="352" y="342" class="m" fill="#e6e6e6">▣ the colours look off here</text>
+<text x="758" y="342" class="m" text-anchor="end" fill="#4eba65">✎ 4 files</text>
+<text x="812" y="342" class="m" text-anchor="end" fill="#ebeb1f">24%</text>
+<text x="884" y="342" class="m" text-anchor="end" fill="#8a8a8a">09:52</text>
+<circle cx="320.5" cy="363" r="4" fill="#d77757"/>
+<text x="334" y="368" class="m" fill="#8a8a8a">6</text>
+<text x="352" y="368" class="m" fill="#e6e6e6">add tests for the toggle</text>
+<text x="758" y="368" class="m" text-anchor="end" fill="#4eba65">✎ 1 file</text>
+<text x="812" y="368" class="m" text-anchor="end" fill="#fcfc05">29%</text>
+<text x="884" y="368" class="m" text-anchor="end" fill="#8a8a8a">10:03</text>
+<circle cx="320.5" cy="389" r="4" fill="#d77757"/>
+<text x="334" y="394" class="m" fill="#8a8a8a">7</text>
+<text x="352" y="394" class="m" fill="#e6e6e6">draw how the theme loads</text>
+<text x="758" y="394" class="m" text-anchor="end" fill="#b1b9f9">◇ Artifact</text>
+<text x="812" y="394" class="m" text-anchor="end" fill="#ffee00">33%</text>
+<text x="884" y="394" class="m" text-anchor="end" fill="#8a8a8a">10:10</text>
+<path d="M320.5 402V454" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M320.5 415H333.5Q338.5 415 338.5 420V426" stroke="#e35ea9" stroke-width="1.6" fill="none"/>
+<circle cx="338.5" cy="441" r="3.8" fill="none" stroke="#e35ea9" stroke-width="1.5"/>
+<text x="352" y="446" class="m" fill="#e35ea9">8</text>
+<text x="370" y="446" class="m" fill="#e6e6e6">try CSS variables instead</text>
+<text x="758" y="446" class="m" text-anchor="end" fill="#e35ea9">1 turn</text>
+<text x="812" y="446" class="m" text-anchor="end" fill="#ffd100">38%</text>
+<text x="884" y="446" class="m" text-anchor="end" fill="#8a8a8a">10:18</text>
+<circle cx="320.5" cy="467" r="4" fill="#d77757"/>
+<text x="334" y="472" class="m" fill="#8a8a8a">8</text>
+<text x="352" y="472" class="m" fill="#e6e6e6">why this approach?</text>
+<text x="758" y="472" class="m" text-anchor="end" fill="#8a8a8a">reply</text>
+<text x="812" y="472" class="m" text-anchor="end" fill="#ffd100">38%</text>
+<text x="884" y="472" class="m" text-anchor="end" fill="#8a8a8a">10:21</text>
+<circle cx="320.5" cy="493" r="4" fill="#d77757"/>
+<text x="334" y="498" class="m" fill="#8a8a8a">9</text>
+<text x="352" y="498" class="m" fill="#e6e6e6">the build got slower, why?</text>
+<text x="758" y="498" class="m" text-anchor="end" fill="#8a8a8a">› 5 cmds</text>
+<text x="812" y="498" class="m" text-anchor="end" fill="#ffa300">46%</text>
+<text x="884" y="498" class="m" text-anchor="end" fill="#8a8a8a">10:34</text>
+<circle cx="320.5" cy="519" r="4" fill="#d77757"/>
+<text x="334" y="524" class="m" fill="#8a8a8a">10</text>
+<text x="361" y="524" class="m" fill="#e6e6e6">fix it</text>
+<text x="758" y="524" class="m" text-anchor="end" fill="#4eba65">✎ 2 files</text>
+<text x="812" y="524" class="m" text-anchor="end" fill="#ff6d00">61%</text>
+<text x="884" y="524" class="m" text-anchor="end" fill="#8a8a8a">10:48</text>
+<circle cx="320.5" cy="545" r="4" fill="#d77757"/>
+<text x="334" y="550" class="m" fill="#8a8a8a">11</text>
+<text x="361" y="550" class="m" fill="#e6e6e6">commit it all</text>
+<text x="758" y="550" class="m" text-anchor="end" fill="#ffc107">● committed</text>
+<text x="812" y="550" class="m" text-anchor="end" fill="#ff4e00">72%</text>
+<text x="884" y="550" class="m" text-anchor="end" fill="#8a8a8a">10:52</text>
+<rect x="306" y="558" width="588" height="26" rx="3" fill="#393b47"/>
+<circle cx="320.5" cy="571" r="5" fill="none" stroke="#d77757" stroke-width="1.5"/>
+<circle cx="320.5" cy="571" r="2.2" fill="#d77757"/>
+<text x="334" y="576" class="m" fill="#e6e6e6" font-weight="700">12</text>
+<text x="361" y="576" class="m" fill="#e6e6e6" font-weight="700">push to main</text>
+<text x="758" y="576" class="m" text-anchor="end" fill="#ffc107">⇡ pushed</text>
+<text x="812" y="576" class="m" text-anchor="end" fill="#ff3500">81%</text>
+<text x="884" y="576" class="m" text-anchor="end" fill="#d77757" font-weight="700">◂ here</text>
+<text x="440" y="40" class="t" text-anchor="middle">list · tree</text>
+<text x="440" y="59" class="d" text-anchor="middle">switch the view</text>
+<path d="M450 66L474 112" class="lead" marker-end="url(#tip)"/>
+<text x="590" y="40" class="t" text-anchor="middle">ctx</text>
+<text x="590" y="59" class="d" text-anchor="middle">show or hide context use</text>
+<path d="M572.5 66V112" class="lead" marker-end="url(#tip)"/>
+<text x="760" y="40" class="t" text-anchor="middle">find</text>
+<text x="760" y="59" class="d" text-anchor="middle">search every prompt</text>
+<path d="M745 66L646 112" class="lead" marker-end="url(#tip)"/>
+<text x="930" y="126" class="t" text-anchor="start">turns to here · branches</text>
+<text x="930" y="145" class="d" text-anchor="start">beside them</text>
+<path d="M922 121H892" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="186" class="t" text-anchor="end">● your conversation</text>
+<text x="272" y="205" class="d" text-anchor="end">each prompt on the line you’re on</text>
+<path d="M280 181H312.5" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="233" class="t" text-anchor="end">A rewind left a branch</text>
+<text x="272" y="252" class="d" text-anchor="end">each branch has its own colour</text>
+<path d="M280 228L328.5 256" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="290" class="t" text-anchor="end">○ a prompt on that branch</text>
+<text x="272" y="309" class="d" text-anchor="end">click it to read its last reply</text>
+<text x="272" y="327" class="d" text-anchor="end">and continue from it</text>
+<path d="M280 285H330.5" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="356" class="t" text-anchor="end">▣ a pasted image</text>
+<path d="M280 351L353 346" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="386" class="t" text-anchor="end">Turn number</text>
+<text x="272" y="405" class="d" text-anchor="end">a branch shares it with the</text>
+<text x="272" y="423" class="d" text-anchor="end">turn that replaced it</text>
+<path d="M280 381L334 372" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="516" class="t" text-anchor="end">Click a prompt</text>
+<text x="272" y="535" class="d" text-anchor="end">to scroll the transcript to it</text>
+<path d="M280 511L353 502" class="lead" marker-end="url(#tip)"/>
+<text x="272" y="576" class="t" text-anchor="end">◉ where the conversation is</text>
+<text x="272" y="595" class="d" text-anchor="end">its row is lit</text>
+<path d="M280 571H311.5" class="lead" marker-end="url(#tip)"/>
+<path d="M918 259V415" class="lead"/>
+<path d="M918 259H722V274" class="lead" marker-end="url(#tip)"/>
+<path d="M918 415H731V430" class="lead" marker-end="url(#tip)"/>
+<text x="932" y="327" class="t" text-anchor="start">How long a branch is</text>
+<text x="932" y="346" class="d" text-anchor="start">its turns, or no reply if it</text>
+<text x="932" y="364" class="d" text-anchor="start">never got one</text>
+<path d="M918 322h8" class="lead"/>
+<path d="M560 652V622H722V588" class="lead" marker-end="url(#tip)"/>
+<text x="380" y="672" class="t" text-anchor="start">What the turn did</text>
+<text x="380" y="694" class="m" fill="#8a8a8a">›</text>
+<text x="396" y="694" class="d">commands run</text>
+<text x="492.4" y="694" class="m" fill="#4eba65">✎</text>
+<text x="508.4" y="694" class="d">files changed</text>
+<text x="380" y="714" class="m" fill="#b1b9f9">◇</text>
+<text x="396" y="714" class="d">another tool</text>
+<text x="492.4" y="714" class="m" fill="#ffc107">●</text>
+<text x="508.4" y="714" class="d">committed</text>
+<text x="583.1999999999999" y="714" class="m" fill="#ffc107">⇡</text>
+<text x="599.1999999999999" y="714" class="d">pushed</text>
+<text x="380" y="734" class="d">or just a reply</text>
+<path d="M798.5 652V588" class="lead" marker-end="url(#tip)"/>
+<text x="700" y="672" class="t" text-anchor="start">Context in use</text>
+<text x="700" y="691" class="d" text-anchor="start">when it was answered</text>
+<rect x="700" y="704" width="200" height="9" rx="4.5" fill="url(#ctx)"/>
+<text x="700" y="732" class="d" font-size="12" text-anchor="start" fill="#999999">0%</text>
+<text x="760" y="732" class="d" font-size="12" text-anchor="middle" fill="#ffff00">30%</text>
+<text x="800" y="732" class="d" font-size="12" text-anchor="middle" fill="#ff8c00">50%</text>
+<text x="900" y="732" class="d" font-size="12" text-anchor="end" fill="#ff0000">100%</text>
+<path d="M980 652V622H857V588" class="lead" marker-end="url(#tip)"/>
+<text x="940" y="672" class="t" text-anchor="start">When you sent it</text>
+<text x="940" y="691" class="d" text-anchor="start">◂ here on the turn you’re at</text>
+</svg>
