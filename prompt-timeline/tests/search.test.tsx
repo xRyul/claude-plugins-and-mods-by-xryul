@@ -65,6 +65,7 @@ test('find opens a field whose words filter the timeline once typing pauses', as
   const keys: string[] = []
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'list-view' })
     expect((await ui.find({ key: 'search-toggle' }))?.text).toBe('○ find')
     expect(await field(ui)).toBeUndefined()
 
@@ -121,6 +122,7 @@ test('a press on a match still picks its prompt', async ($, on) => {
   await $.session.append(prompt('u2', 'beta'))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   await ui.press({ key: 'search-toggle' })
   await type(ui, 'alp', 'change')
   await clock.advance(150)
@@ -135,6 +137,7 @@ test('a prompt sent while searching joins the matches', async ($, on) => {
   await $.session.append(prompt('u1', 'deploy the worker'))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   await ui.press({ key: 'search-toggle' })
   await type(ui, 'worker', 'change')
   await clock.advance(150)
@@ -153,6 +156,7 @@ test('a query matching more than a hundred prompts draws the newest hundred', as
 
   // Wide enough for the count of matches beside the header's controls.
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 52 }, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   await ui.press({ key: 'search-toggle' })
   await type(ui, 'plan')
   await clock.settle()
@@ -177,6 +181,7 @@ test("an earlier prompt is searched by its whole text, as the transcript holds i
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   await ui.press({ key: 'search-toggle' })
   await type(ui, 'needle is', 'change')
   await clock.advance(150)
@@ -192,6 +197,7 @@ test('the header gives way as the dock narrows', async ($, on) => {
 
   const at = async (bodyColumns: number) => {
     const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'terminal' })
+    await ui.press({ key: 'list-view' })
     const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
     await ui.unmount()
 

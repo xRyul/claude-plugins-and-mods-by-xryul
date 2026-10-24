@@ -33,11 +33,33 @@ const SCAN = [
   'T\tf\te\t2026-10-20T13:05:00Z\tf9\t1\t0\t\t2\tsixth"\tsixth reply"',
 ]
 
+// The list scan's records for the same prompts: each first response's tokens,
+// of a window of 200,000. c's turn has none.
+const PROMPTS = [
+  'P\t1\ta\t2026-10-20T13:00:00Z\tfirst"',
+  'R\t2\t20000',
+  'P\t3\tb\t2026-10-20T13:01:00Z\tsecond"',
+  'R\t4\t150000',
+  'P\t5\tc\t2026-10-20T13:02:00Z\tthird"',
+  'P\t7\td\t2026-10-20T13:03:00Z\tfourth"',
+  'R\t8\t190000',
+  'P\t9\te\t2026-10-20T13:04:00Z\tfifth"',
+  'R\t10\t60000',
+  'P\t11\tf\t2026-10-20T13:05:00Z\tsixth"',
+  'R\t12\t100000',
+]
+
 // The engine beneath the plugin, as far as these tests reach it: a transcript
-// whose tree is SCAN, a shell that appends, and a `/resume` that takes or not.
-const engine = (on: On, resume?: () => Promise<unknown>, scan = SCAN) => {
+// whose tree is SCAN, and whose list is `prompts`, a store holding `stored`, a
+// shell that appends, and a `/resume` that takes or not.
+const engine = (
+  on: On,
+  resume?: () => Promise<unknown>,
+  scan = SCAN,
+  { stored = {}, prompts = [] }: { stored?: Record<string, unknown>; prompts?: string[] } = {},
+) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-20T14:00:00Z') })
-  mock.store(on)
+  mock.store(on, stored)
   mock.env(on, { HOME: '/home/me' })
   mock.session(on)
   const toasts: string[] = []
@@ -62,7 +84,7 @@ const engine = (on: On, resume?: () => Promise<unknown>, scan = SCAN) => {
     return {
       value: {
         exitCode: 0,
-        stdout: isTreeScan ? scan.join('\n') : '',
+        stdout: isTreeScan ? scan.join('\n') : e.argv[0] === 'awk' ? prompts.join('\n') : '',
         stderr: '',
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -85,13 +107,14 @@ const rows = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: un
     .map(button => button.text)
 
 test('the tree draws every branch under the prompt it grew from, and marks where the session stands', async ($, on) => {
-  engine(on)
+  const { clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  // The tree is read unawaited at start.
+  await clock.settle()
   const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
-  // The switch shows the tree filled in the accent, the list beside it on the
-  // theme's shade.
+  // The pane opens on the tree: the switch shows it filled in the accent, the
+  // list beside it on the theme's shade.
   expect((await ui.find({ type: 'Text', text: ' tree ' }))?.props).toEqual({
     backgroundColor: 'claude',
     color: 'inverseText',
@@ -137,15 +160,71 @@ test('the tree draws every branch under the prompt it grew from, and marks where
   await ui.unmount()
 })
 
+test('each row shows the context its prompt was answered over, between what the turn did and when it was sent', async ($, on) => {
+  const { clock } = engine(on, undefined, SCAN, { prompts: PROMPTS })
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
+
+  // In the tree's order, a branch's prompts too, toned as the list tones them;
+  // c's row leaves the column blank.
+  const gauges = async () =>
+    (await ui.findAll({ type: 'Text', text: /%$/ })).map(gauge => [gauge.text, gauge.props])
+  expect(await gauges()).toEqual([
+    ['   10%', { dimColor: true }],
+    ['   75%', { color: 'warning' }],
+    ['   95%', { color: 'error' }],
+    ['   30%', { dimColor: true }],
+    ['   50%', { dimColor: true }],
+  ])
+  const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+  const at = texts.indexOf('   10%')
+  expect(texts[at - 1]?.trim()).toBe('reply')
+  expect(texts[at + 1]).toMatch(/^ {2}.{6}$/)
+
+  // ctx hides the column here as in the list.
+  expect((await ui.find({ key: 'context' }))?.text).toBe('● ctx')
+  await ui.press({ key: 'context' })
+  expect((await ui.find({ key: 'context' }))?.text).toBe('○ ctx')
+  expect(await gauges()).toEqual([])
+  await ui.press({ key: 'context' })
+  await ui.unmount()
+
+  // In a narrow dock the context gives way first: what the turn did stays.
+  const narrow = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await narrow.findAll({ type: 'Text', text: /%$/ })).toEqual([])
+  expect(await narrow.find({ type: 'Text', text: /› 2 cmds$/ })).toBeDefined()
+  await narrow.unmount()
+})
+
+test('the pane opens on the tree, whatever view an earlier version stored, and the list lasts the session', async ($, on) => {
+  const { clock } = engine(on, undefined, SCAN, { stored: { isTree: false } })
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: ' tree ' }))?.props).toEqual(
+    expect.objectContaining({ backgroundColor: 'claude' }),
+  )
+  expect(await rows(ui)).toHaveLength(6)
+
+  await ui.press({ key: 'list-view' })
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await again.find({ type: 'Text', text: ' list ' }))?.props).toEqual(
+    expect.objectContaining({ backgroundColor: 'claude' }),
+  )
+  await again.unmount()
+})
+
 test('a branch of a branch forks off its own line, one lane further in', async ($, on) => {
   // c and its branch g fork off b; g left no reply.
-  engine(on, undefined, [
+  const { clock } = engine(on, undefined, [
     ...SCAN,
     'T\tg\tc\t2026-10-20T13:06:00Z\tg9\t0\t0\t\t0\tseventh"\t',
   ].sort((one, other) => (one.startsWith('T\tg') ? -1 : 0) - (other.startsWith('T\tg') ? -1 : 0)))
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   expect(await rows(ui)).toEqual([
     '● 1 first',
@@ -169,10 +248,10 @@ test('a branch of a branch forks off its own line, one lane further in', async (
 })
 
 test('a switch moves the numbers and the lit lines, never the rows', async ($, on) => {
-  engine(on, undefined, ['H\td', ...SCAN.slice(1)])
+  const { clock } = engine(on, undefined, ['H\td', ...SCAN.slice(1)])
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   // The same rows as when the session stood at f: now the path turns off the
   // lane into the old branch, and the lane's own turns are a branch it left.
@@ -193,10 +272,10 @@ test('a switch moves the numbers and the lit lines, never the rows', async ($, o
 })
 
 test('after a rewind, the prompts past where the session stands stay where they were', async ($, on) => {
-  engine(on, undefined, ['H\tb', ...SCAN.slice(1)])
+  const { clock } = engine(on, undefined, ['H\tb', ...SCAN.slice(1)])
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   expect(await rows(ui)).toEqual(['● 1 first', '◉ 2 second', '│ ○ 3 third', '│ ○ 4 fourth', '○ 3 fifth', '○ 4 sixth'])
   expect((await ui.find({ type: 'Text', text: 'second' }))?.props).toEqual({ bold: true })
@@ -213,10 +292,10 @@ const RESTART = [
 ]
 
 test('a rewind to the top starts a line of its own, and the conversation it left forks off above it', async ($, on) => {
-  engine(on, undefined, RESTART)
+  const { clock } = engine(on, undefined, RESTART)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   expect(await rows(ui)).toEqual(['│ ○ 1 first', '│ ○ 2 second', '◉ 1 first again'])
   expect(await ui.find({ type: 'Text', text: '1 turn · 1 branch' })).toBeDefined()
@@ -233,10 +312,10 @@ test('a rewind to the top starts a line of its own, and the conversation it left
 })
 
 test('back on the conversation a rewind to the top left, the tree says it branched from the start', async ($, on) => {
-  engine(on, undefined, ['H\tb', ...RESTART.slice(1)])
+  const { clock } = engine(on, undefined, ['H\tb', ...RESTART.slice(1)])
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   expect(await rows(ui)).toEqual(['│ ● 1 first', '│ ◉ 2 second', '○ 1 first again'])
   expect(await ui.find({ type: 'Text', text: '2 turns · 1 branch' })).toBeDefined()
@@ -248,10 +327,10 @@ test('back on the conversation a rewind to the top left, the tree says it branch
 })
 
 test("the last row copies the command that opens the session where it stands", async ($, on) => {
-  const { copies } = engine(on)
+  const { copies, clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'copy-here' })
 
   expect(copies).toEqual(['/resume-at s1:f9'])
@@ -259,10 +338,10 @@ test("the last row copies the command that opens the session where it stands", a
 })
 
 test('a prompt on an abandoned branch opens a card with its reply', async ($, on) => {
-  const { toasts } = engine(on)
+  const { toasts, clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
 
   await ui.press({ key: 'd' })
   expect(await ui.find({ type: 'Text', text: 'the border is "done"' })).toBeDefined()
@@ -287,10 +366,10 @@ test('a prompt on an abandoned branch opens a card with its reply', async ($, on
 })
 
 test("a card copies the command that opens the session at its turn from another terminal", async ($, on) => {
-  const { copies, toasts } = engine(on)
+  const { copies, toasts, clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'd' })
   await ui.press({ key: 'copy:d' })
 
@@ -300,12 +379,12 @@ test("a card copies the command that opens the session at its turn from another 
 })
 
 test('continue from here points the session at the end of that turn and resumes it', async ($, on) => {
-  const { appended, commands, toasts } = engine(on, () =>
+  const { appended, commands, toasts, clock } = engine(on, () =>
     $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } }),
   )
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'd' })
   await ui.press({ key: 'switch:d' })
 
@@ -325,10 +404,10 @@ test('continue from here points the session at the end of that turn and resumes 
 })
 
 test("a resume that does not take leaves the branch saved and says how to open it", async ($, on) => {
-  const { commands, copies, toasts } = engine(on)
+  const { commands, copies, toasts, clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'c' })
   await ui.press({ key: 'switch:c' })
 
@@ -339,10 +418,10 @@ test("a resume that does not take leaves the branch saved and says how to open i
 })
 
 test('find leaves the tree for the list', async ($, on) => {
-  engine(on)
+  const { clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'tree-toggle' })
   await ui.press({ key: 'search-toggle' })
 
   expect((await ui.find({ type: 'Text', text: ' list ' }))?.props).toEqual(

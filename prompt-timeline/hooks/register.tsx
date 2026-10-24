@@ -62,8 +62,7 @@ const AGE_COLUMNS = 8
 // The context column's width: "100%".
 const CONTEXT_COLUMNS = 4
 // The header's controls: the switch between the list and the tree, `  list
-// tree `, `  ○ find`, and `  ● ctx`, which only the list shows; and its title,
-// `◆ Timeline`.
+// tree `, `  ○ find`, and `  ● ctx`; and its title, `◆ Timeline`.
 const SWITCH_COLUMNS = 14
 const FIND_COLUMNS = 8
 const CONTEXT_TOGGLE_COLUMNS = 7
@@ -199,8 +198,9 @@ const DOTS = { here: '◉', path: '●', off: '○' } as const
 // keys, so the lines follow the person's theme.
 const PATH = -1
 const TONES = ['merged', 'planMode', 'bashBorder', 'ide', 'success', 'warning']
-// The width of what a tree row ends with: what the turn did, then when it was
-// asked ("◂ here" on the row the conversation stands at).
+// The width of what a tree row ends with: what the turn did, then the context
+// its first response was answered over (CONTEXT_COLUMNS, as the list's), then
+// when it was asked ("◂ here" on the row the conversation stands at).
 const OUTCOME_COLUMNS = 11
 const AT_COLUMNS = 6
 // How many lines of its last reply an opened card shows.
@@ -239,7 +239,9 @@ const tick = atom({ plugin: 'prompt-timeline', key: 'tick' } as const, 0)
 // time it opens is a new, empty field.
 const field = atom({ plugin: 'prompt-timeline', key: 'field' } as const, '')
 const found = atom({ plugin: 'prompt-timeline', key: 'found' } as const, NOTHING_FOUND)
-const isTree = atom({ plugin: 'prompt-timeline', key: 'isTree' } as const, false)
+// The pane opens on the tree. The list, chosen or left for by a search, lasts
+// the session.
+const isTree = atom({ plugin: 'prompt-timeline', key: 'isTree' } as const, true)
 // Shaped: a tree an earlier version laid out reads as empty until it is read
 // again, never as rows of the old shape.
 const tree = atom({ plugin: 'prompt-timeline', key: 'tree' } as const, [], { shape: 'tree-2' })
@@ -547,10 +549,7 @@ async function toggleSearch($: EngineInterface) {
   if (key === '') return
 
   // The search filters the list: leave the tree for it.
-  if (await read($, isTree)) {
-    await update($, isTree, () => false)
-    await $.store.set('isTree', false)
-  }
+  await update($, isTree, () => false)
 
   // The field sits at the top: scroll it into view. A press leaves the keys
   // with the prompt, so the pane asks for them (granted over an empty prompt),
@@ -776,7 +775,6 @@ async function toggleTree($: EngineInterface) {
   await closeSearch($)
   await update($, opened, () => '')
   await update($, isTree, () => isShown)
-  await $.store.set('isTree', isShown)
   if (!isShown) return
 
   await grow($).catch(() => undefined)
@@ -1045,11 +1043,9 @@ export const register: Register = on => {
     // went with the old module. The turns went too: the tree is read again.
     await closeSearch($)
     void seed($).catch(() => undefined)
-    const isTreeShown = (await $.store.get('isTree')) === true
-    await update($, isTree, () => isTreeShown)
     await update($, opened, () => '')
     grownAt = -1
-    if (isTreeShown) void grow($).catch(() => undefined)
+    if (await read($, isTree)) void grow($).catch(() => undefined)
     // The minute also reads in a rewind, which no hook here sees: it writes a
     // record the scan's size check notices.
     $.clock.every(60_000, () => {
@@ -1211,7 +1207,7 @@ export const register: Register = on => {
         : isFiltered
           ? `${results.total} of ${list.length}`
           : `${list.length} prompt${list.length === 1 ? '' : 's'}`
-    const controls = SWITCH_COLUMNS + FIND_COLUMNS + (isTreeShown ? 0 : CONTEXT_TOGGLE_COLUMNS)
+    const controls = SWITCH_COLUMNS + FIND_COLUMNS + CONTEXT_TOGGLE_COLUMNS
     const isNamed = width >= TITLE_COLUMNS + controls + 2 + count.length
     const isCounted = width >= (isNamed ? TITLE_COLUMNS : 1) + controls + 2 + count.length
     // The list and the tree, side by side: the one shown filled in the accent,
@@ -1238,14 +1234,12 @@ export const register: Register = on => {
             <Text>{'  '}</Text>
             {view('list', 'list-view')}
             {view('tree', 'tree-toggle')}
-            {!isTreeShown && <Text>{'  '}</Text>}
-            {!isTreeShown && (
-              <Button key="context" plain onPress={() => toggleContext($)}>
-                <Text color={isContextShown ? ACCENT : undefined} dimColor={!isContextShown}>
-                  {isContextShown ? '● ctx' : '○ ctx'}
-                </Text>
-              </Button>
-            )}
+            <Text>{'  '}</Text>
+            <Button key="context" plain onPress={() => toggleContext($)}>
+              <Text color={isContextShown ? ACCENT : undefined} dimColor={!isContextShown}>
+                {isContextShown ? '● ctx' : '○ ctx'}
+              </Text>
+            </Button>
             {Input !== undefined && <Text>{'  '}</Text>}
             {Input !== undefined && (
               <Button key="search-toggle" plain onPress={() => toggleSearch($)}>
@@ -1363,6 +1357,8 @@ export const register: Register = on => {
         .usage()
         .then(usage => usage.context.percent)
         .catch(() => undefined)
+      // Each prompt's context, as the list has it: a branch's prompts too.
+      const percents = new Map(list.map(entry => [entry.id, entry.context]))
 
       return (
         <Box flexDirection="column" paddingLeft={1}>
@@ -1370,13 +1366,20 @@ export const register: Register = on => {
           {nodes.map((node, index) => {
             const isOff = node.place === 'off'
             const isHere = node.place === 'here'
-            // What the turn did, and when it was asked, give way to the
-            // prompt where a deep branch leaves little room.
+            // The context, what the turn did, and when it was asked give way
+            // to the prompt, in that order, where a deep branch leaves little
+            // room.
             const space = width - columns(node.cells) - String(node.depth).length - 2
             const isTimed = space - AT_COLUMNS - 2 >= 12
             const isTold = isTimed && space - AT_COLUMNS - OUTCOME_COLUMNS - 4 >= 12
-            const room = space - (isTimed ? AT_COLUMNS + 2 : 0) - (isTold ? OUTCOME_COLUMNS + 2 : 0)
+            const isGauged = isContextShown && isTold && space - AT_COLUMNS - OUTCOME_COLUMNS - CONTEXT_COLUMNS - 6 >= 12
+            const room =
+              space -
+              (isTimed ? AT_COLUMNS + 2 : 0) -
+              (isTold ? OUTCOME_COLUMNS + 2 : 0) -
+              (isGauged ? CONTEXT_COLUMNS + 2 : 0)
             const kind = node.outcome.kind
+            const percent = percents.get(node.id)
 
             return (
               <Box flexDirection="column">
@@ -1411,6 +1414,11 @@ export const register: Register = on => {
                                 : { dimColor: true })}
                       >
                         {`  ${cut(node.chip ?? node.outcome.label, OUTCOME_COLUMNS).padStart(OUTCOME_COLUMNS)}`}
+                      </Text>
+                    )}
+                    {isGauged && (
+                      <Text {...contextTone(percent)}>
+                        {`  ${(percent === undefined ? '' : `${percent}%`).padStart(CONTEXT_COLUMNS)}`}
                       </Text>
                     )}
                     {isTimed &&

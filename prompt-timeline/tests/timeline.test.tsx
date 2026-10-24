@@ -47,6 +47,7 @@ test('the person\'s prompts are listed, and a press marks the one picked', async
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'list-view' })
 
     expect((await ui.find({ key: 'u1' }))?.text).toBe('1  fix the overlay and…')
     expect(await ui.find({ key: 'u2' })).toBeUndefined()
@@ -82,6 +83,7 @@ test('a long prompt is cut to fit beside its context and age', async ($, on) => 
   await $.session.append(prompt('u1', 'word '.repeat(40)))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   // 40 columns less the padding: the number, the text, then 4 for the context
   // and 8 for the age, two spaces before each.
   expect((await ui.find({ key: 'u1' }))?.text).toBe('1  word word word word…')
@@ -96,6 +98,7 @@ test('the ctx button hides and shows the context column', async ($, on) => {
   await $.session.append(prompt('u1', 'word '.repeat(40)))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   expect((await ui.find({ key: 'context' }))?.text).toBe('● ctx')
 
   await ui.press({ key: 'context' })
@@ -139,6 +142,7 @@ test("an earlier prompt's context is read from its first response in the transcr
   await clock.settle()
 
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   expect((await ui.find({ key: 'h1' }))?.text).toBe('1  first line')
   expect((await ui.find({ key: 'h2' }))?.text).toBe('2  second é cut here…')
   expect((await ui.find({ key: 'h3' }))?.text).toBe('3  "quoted"')
@@ -173,6 +177,7 @@ test("a live prompt's context is the usage of the first response that carried it
   // A subagent's step carries none of main's prompts.
   await step('agent-1')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'list-view' })
   expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
 
   await step()
