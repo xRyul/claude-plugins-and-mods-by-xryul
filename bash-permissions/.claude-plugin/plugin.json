@@ -1,0 +1,34 @@
+{
+  "name": "bash-permissions",
+  "version": "0.1.0",
+  "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …) with a one-sentence explanation and a danger score. /bash-permissions shows the rules.",
+  "author": { "name": "xRyul" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "alwaysAllow": {
+      "type": "string",
+      "title": "Always allowed rules",
+      "description": "Rule IDs that never ask, comma separated (e.g. git-commit, gt-modify). \"Always allow\" in the prompt adds to this list. /bash-permissions rules lists every ID.",
+      "default": ""
+    },
+    "alwaysAsk": {
+      "type": "string",
+      "title": "Extra rules that ask",
+      "description": "Rule IDs that are off by default but should ask, comma separated (e.g. rm-rf, sudo, git-reset-hard).",
+      "default": ""
+    },
+    "explain": {
+      "type": "boolean",
+      "title": "Explain commands",
+      "description": "Ask a model for a one-sentence explanation and a 1–100 danger score before prompting. Off: a built-in sentence and the rule's severity.",
+      "default": true
+    },
+    "model": {
+      "type": "string",
+      "title": "Explanation model",
+      "description": "Model alias or ID used for the explanation.",
+      "default": "haiku"
+    }
+  }
+}

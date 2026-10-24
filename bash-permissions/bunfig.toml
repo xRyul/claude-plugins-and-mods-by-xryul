@@ -1,0 +1,3 @@
+[test]
+# The tests/ folder holds claude plugin test files, which need Claude Code.
+root = "spec"

@@ -1,0 +1,24 @@
+{
+  "name": "plugins-and-mods-by-xryul",
+  "description": "Claude Code plugins and mods by xRyul: Dracula transcript styling, a Bash permission gate and a prompt timeline pane",
+  "owner": {
+    "name": "xRyul"
+  },
+  "plugins": [
+    {
+      "name": "dracula-theme-mod",
+      "source": "./dracula-theme-mod",
+      "description": "Dracula transcript styling: tool call cards, coloured status lines, inline code pills and no dots"
+    },
+    {
+      "name": "bash-permissions",
+      "source": "./bash-permissions",
+      "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …) with a one-sentence explanation and a danger score. /bash-permissions shows the rules."
+    },
+    {
+      "name": "prompt-timeline",
+      "source": "./prompt-timeline",
+      "description": "A pane listing this session's prompts with their age and context usage; click one to scroll the transcript to it, find to search every prompt's full text, or tree to see every branch a rewind left and continue from one. /timeline shows or hides it."
+    }
+  ]
+}
