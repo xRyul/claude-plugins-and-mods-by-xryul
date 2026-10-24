@@ -61,6 +61,15 @@ END {
 const AGE_COLUMNS = 8
 // The context column's width: "100%".
 const CONTEXT_COLUMNS = 4
+// The context column's colour as the window fills: a dim grey when empty,
+// yellow at 30%, orange at 50%, bright red when full. Each percent between two
+// of these is a step from one to the next.
+const TONES_AT = [
+  { at: 0, rgb: [0x99, 0x99, 0x99] },
+  { at: 30, rgb: [0xff, 0xff, 0x00] },
+  { at: 50, rgb: [0xff, 0x8c, 0x00] },
+  { at: 100, rgb: [0xff, 0x00, 0x00] },
+]
 // The header's controls: the switch between the list and the tree, `  list
 // tree `, `  ○ find`, and `  ● ctx`; and its title, `◆ Timeline`.
 const SWITCH_COLUMNS = 14
@@ -406,12 +415,17 @@ function age(at: number, now: number): string {
   return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
 }
 
-// Dim while the window has room; the theme's warning, then error, as it fills.
+// Grey while the window has room, through yellow and orange as it fills, to
+// bright red when it is full.
 function contextTone(percent: number | undefined) {
-  if (percent !== undefined && percent >= 90) return { color: 'error' }
-  if (percent !== undefined && percent >= 70) return { color: 'warning' }
+  if (percent === undefined) return { dimColor: true }
+  const end = Math.max(1, TONES_AT.findIndex(tone => percent <= tone.at))
+  const from = TONES_AT[end - 1]!
+  const to = TONES_AT[end]!
+  const share = (percent - from.at) / (to.at - from.at)
+  const channels = from.rgb.map((channel, i) => Math.round(channel + (to.rgb[i]! - channel) * share))
 
-  return { dimColor: true }
+  return { color: `#${channels.map(channel => channel.toString(16).padStart(2, '0')).join('')}` }
 }
 
 // The Claude Code folder that holds every project's transcripts.

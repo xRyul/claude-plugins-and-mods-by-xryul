@@ -146,8 +146,8 @@ test("an earlier prompt's context is read from its first response in the transcr
   expect((await ui.find({ key: 'h1' }))?.text).toBe('1  first line')
   expect((await ui.find({ key: 'h2' }))?.text).toBe('2  second é cut here…')
   expect((await ui.find({ key: 'h3' }))?.text).toBe('3  "quoted"')
-  expect((await ui.find({ type: 'Text', text: /^ +10%$/ }))?.props).toEqual({ dimColor: true })
-  expect((await ui.find({ type: 'Text', text: /^ +75%$/ }))?.props).toEqual({ color: 'warning' })
+  expect((await ui.find({ type: 'Text', text: /^ +10%$/ }))?.props).toEqual({ color: '#bbbb66' })
+  expect((await ui.find({ type: 'Text', text: /^ +75%$/ }))?.props).toEqual({ color: '#ff4600' })
   await ui.unmount()
 })
 

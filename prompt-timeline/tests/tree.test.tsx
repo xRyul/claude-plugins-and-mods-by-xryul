@@ -183,11 +183,11 @@ test('each row shows the context its prompt was answered over, between what the 
   const gauges = async () =>
     (await ui.findAll({ type: 'Text', text: /%$/ })).map(gauge => [gauge.text, gauge.props])
   expect(await gauges()).toEqual([
-    ['   10%', { dimColor: true }],
-    ['   75%', { color: 'warning' }],
-    ['   95%', { color: 'error' }],
-    ['   30%', { dimColor: true }],
-    ['   50%', { dimColor: true }],
+    ['   10%', { color: '#bbbb66' }],
+    ['   75%', { color: '#ff4600' }],
+    ['   95%', { color: '#ff0e00' }],
+    ['   30%', { color: '#ffff00' }],
+    ['   50%', { color: '#ff8c00' }],
   ])
   const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
   const at = texts.indexOf('   10%')
