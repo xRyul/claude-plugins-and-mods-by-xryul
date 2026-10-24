@@ -208,9 +208,6 @@ const REPLY_LINES = 4
 // Behind the row the conversation stands at, and an opened card: the theme's
 // own shade behind the person's messages.
 const HIGHLIGHT = 'userMessageBackground'
-// The tree's last row copies the command that opens the session where it
-// stands.
-const COPY_HERE = 'copy-here'
 
 // What the search field's key opens with: the one element the focus ring may
 // rest on.
@@ -1289,7 +1286,6 @@ export const register: Register = on => {
         const key = pressed.element
         if (key.startsWith(SWITCH)) return switchTo($, key.slice(SWITCH.length))
         if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length))
-        if (key === COPY_HERE) return here === undefined ? undefined : copyResume($, here.id)
 
         return pick($, key)
       }
@@ -1348,19 +1344,6 @@ export const register: Register = on => {
         ]
       }
 
-      // Where the conversation stands: on the line the tree starts down, or on
-      // a branch it took at a turn, or at the top.
-      const left = nodes.find(node => node.place !== 'off' && node.lane > 0)
-      const where =
-        left === undefined
-          ? 'on the main line'
-          : left.depth === 1
-            ? 'on a branch from the start'
-            : `on a branch from turn ${left.depth - 1}`
-      const context = await $.session
-        .usage()
-        .then(usage => usage.context.percent)
-        .catch(() => undefined)
       // Each prompt's context, as the list has it: a branch's prompts too.
       const percents = new Map(list.map(entry => [entry.id, entry.context]))
 
@@ -1450,22 +1433,6 @@ export const register: Register = on => {
             )
           })}
           {narrow}
-          {here !== undefined && (
-            <Box flexDirection="column" marginTop={1}>
-              <Text dimColor wrap="truncate">
-                {'─'.repeat(width)}
-              </Text>
-              <Box justifyContent="space-between" height={1} overflow="hidden">
-                <Text wrap="truncate">
-                  <Text color={ACCENT}>◉</Text>
-                  <Text dimColor>{` turn ${here.depth} · ${where}${context === undefined ? '' : ` · ${context}% ctx`}`}</Text>
-                </Text>
-                <Button key={COPY_HERE} plain onPress={pressTree}>
-                  <Text color="suggestion">⧉ copy /resume-at</Text>
-                </Button>
-              </Box>
-            </Box>
-          )}
         </Box>
       )
     }

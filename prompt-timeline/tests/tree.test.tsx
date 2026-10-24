@@ -156,7 +156,6 @@ test('the tree draws every branch under the prompt it grew from, and marks where
   expect((await ui.find({ type: 'Text', text: /◇ Artifact$/ }))?.props).toEqual({ color: 'suggestion' })
   expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'planMode' })
   expect(await ui.findAll({ type: 'Text', text: /◂ here/ })).toHaveLength(1)
-  expect((await ui.find({ type: 'Text', text: / turn 4 · / }))?.text).toBe('◉ turn 4 · on the main line')
   await ui.unmount()
 })
 
@@ -267,7 +266,6 @@ test('a switch moves the numbers and the lit lines, never the rows', async ($, o
   expect((await ui.find({ type: 'Text', text: '─╮' }))?.props).toEqual({ color: 'claude' })
   expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'merged' })
   expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'merged' })
-  expect((await ui.find({ type: 'Text', text: / turn 4 · / }))?.text).toBe('◉ turn 4 · on a branch from turn 2')
   await ui.unmount()
 })
 
@@ -307,11 +305,10 @@ test('a rewind to the top starts a line of its own, and the conversation it left
   expect(colours.filter(colour => colour !== 'claude')).toEqual(['planMode'])
   expect(colours.at(-1)).toBe('claude')
   expect((await ui.find({ type: 'Text', text: /2 turns$/ }))?.props).toEqual({ color: 'planMode' })
-  expect((await ui.find({ type: 'Text', text: / turn 1 · / }))?.text).toBe('◉ turn 1 · on the main line')
   await ui.unmount()
 })
 
-test('back on the conversation a rewind to the top left, the tree says it branched from the start', async ($, on) => {
+test('back on the conversation a rewind to the top left, its line is lit and the new start is a branch', async ($, on) => {
   const { clock } = engine(on, undefined, ['H\tb', ...RESTART.slice(1)])
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -322,16 +319,16 @@ test('back on the conversation a rewind to the top left, the tree says it branch
   expect((await ui.find({ type: 'Text', text: '┬' }))?.props).toEqual({ color: 'claude' })
   expect((await ui.find({ type: 'Text', text: '│ ' }))?.props).toEqual({ color: 'merged' })
   expect((await ui.find({ type: 'Text', text: /1 turn$/ }))?.props).toEqual({ color: 'merged' })
-  expect((await ui.find({ type: 'Text', text: / turn 2 · / }))?.text).toBe('◉ turn 2 · on a branch from the start')
   await ui.unmount()
 })
 
-test("the last row copies the command that opens the session where it stands", async ($, on) => {
+test("the row where the session stands opens a card that copies the command to open it there", async ($, on) => {
   const { copies, clock } = engine(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'copy-here' })
+  await ui.press({ key: 'f' })
+  await ui.press({ key: 'copy:f' })
 
   expect(copies).toEqual(['/resume-at s1:f9'])
   await ui.unmount()
