@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1016" viewBox="0 0 960 1016" role="img" aria-labelledby="title desc">
+<title id="title">Moving between branches in prompt-timeline</title>
+<desc id="desc">The tree before and after continue here on a prompt three branches deep: the accent line and the lit row move to the branch picked, the line left behind becomes a branch of its own, and every prompt keeps its place.</desc>
+<style>
+.m{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:15px}
+.t{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;fill:#ededf2}
+.d{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;fill:#9ea2b5}
+.tag{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:600;letter-spacing:.08em;fill:#9ea2b5}
+.lead{fill:none;stroke:#b9bdcc;stroke-width:1.3}
+</style>
+<defs>
+<marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1L9 5L0 9z" fill="#b9bdcc"/></marker>
+<marker id="big" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4f8ad0"/></marker>
+</defs>
+<rect width="960" height="1016" rx="14" fill="#1b1c22"/>
+<text x="270" y="50" class="tag">YOU’RE AT TURN 3, READING A BRANCH YOU LEFT</text>
+<rect x="270" y="64" width="400" height="436" rx="10" fill="#262626" stroke="#3d3f4c"/>
+<rect x="276" y="462" width="388" height="24" rx="3" fill="#393b47"/>
+<rect x="376" y="318" width="270" height="72" fill="#393b47"/>
+<path d="M290.5 102V438" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M308.5 174V414" stroke="#4fa597" stroke-width="1.6" fill="none"/>
+<path d="M326.5 246V390" stroke="#e35ea9" stroke-width="1.6" fill="none"/>
+<circle cx="290.5" cy="90" r="4" fill="#d77757"/>
+<text x="304" y="95" class="m" fill="#8a8a8a">1</text>
+<text x="322" y="95" class="m" fill="#e6e6e6">add a settings page</text>
+<path d="M290.5 114H295" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M295 114H303.5Q308.5 114 308.5 119V126" stroke="#4fa597" stroke-width="1.6" fill="none"/>
+<circle cx="308.5" cy="138" r="3.8" fill="none" stroke="#4fa597" stroke-width="1.5"/>
+<text x="322" y="143" class="m" fill="#4fa597">2</text>
+<text x="340" y="143" class="m" fill="#e6e6e6">put it in a modal</text>
+<circle cx="308.5" cy="162" r="3.8" fill="none" stroke="#4fa597" stroke-width="1.5"/>
+<text x="322" y="167" class="m" fill="#4fa597">3</text>
+<text x="340" y="167" class="m" fill="#e6e6e6">add a theme picker</text>
+<path d="M308.5 186H313" stroke="#4fa597" stroke-width="1.6" fill="none"/>
+<path d="M313 186H321.5Q326.5 186 326.5 191V198" stroke="#e35ea9" stroke-width="1.6" fill="none"/>
+<circle cx="326.5" cy="210" r="3.8" fill="none" stroke="#e35ea9" stroke-width="1.5"/>
+<text x="340" y="215" class="m" fill="#e35ea9">4</text>
+<text x="358" y="215" class="m" fill="#e6e6e6">use a dropdown</text>
+<circle cx="326.5" cy="234" r="3.8" fill="none" stroke="#e35ea9" stroke-width="1.5"/>
+<text x="340" y="239" class="m" fill="#e35ea9">5</text>
+<text x="358" y="239" class="m" fill="#e6e6e6">preview each theme</text>
+<path d="M326.5 258H331" stroke="#e35ea9" stroke-width="1.6" fill="none"/>
+<path d="M331 258H339.5Q344.5 258 344.5 263V270" stroke="#4f8ad0" stroke-width="1.6" fill="none"/>
+<circle cx="344.5" cy="282" r="3.8" fill="none" stroke="#4f8ad0" stroke-width="1.5"/>
+<text x="358" y="287" class="m" fill="#4f8ad0">6</text>
+<text x="376" y="287" class="m" fill="#e6e6e6">preview on hover</text>
+<circle cx="344.5" cy="306" r="3.8" fill="none" stroke="#4f8ad0" stroke-width="1.5"/>
+<text x="358" y="311" class="m" fill="#4f8ad0">7</text>
+<text x="376" y="311" class="m" fill="#e6e6e6">make it subtle</text>
+<text x="385" y="335" class="m" font-style="italic" fill="#8a8a8a">Done: it fades in on hover.</text>
+<rect x="385" y="344" width="153" height="20" fill="#4f8ad0"/>
+<text x="461.5" y="359" class="m" text-anchor="middle" font-weight="700" fill="#111111">↪ continue here</text>
+<rect x="386" y="372" width="6.5" height="6.5" fill="none" stroke="#b1b9f9" stroke-width="1.2"/>
+<rect x="388.5" y="374.5" width="6.5" height="6.5" fill="#393b47" stroke="#b1b9f9" stroke-width="1.2"/>
+<text x="403" y="383" class="m" fill="#b1b9f9">copy /resume-at …:5b9076f8</text>
+<circle cx="326.5" cy="402" r="3.8" fill="none" stroke="#e35ea9" stroke-width="1.5"/>
+<text x="340" y="407" class="m" fill="#e35ea9">6</text>
+<text x="358" y="407" class="m" fill="#e6e6e6">save it per device</text>
+<circle cx="308.5" cy="426" r="3.8" fill="none" stroke="#4fa597" stroke-width="1.5"/>
+<text x="322" y="431" class="m" fill="#4fa597">4</text>
+<text x="340" y="431" class="m" fill="#e6e6e6">use radio buttons</text>
+<circle cx="290.5" cy="450" r="4" fill="#d77757"/>
+<text x="304" y="455" class="m" fill="#8a8a8a">2</text>
+<text x="322" y="455" class="m" fill="#e6e6e6">make it a full page</text>
+<circle cx="290.5" cy="474" r="5" fill="none" stroke="#d77757" stroke-width="1.5"/>
+<circle cx="290.5" cy="474" r="2.2" fill="#d77757"/>
+<text x="304" y="479" class="m" fill="#e6e6e6" font-weight="700">3</text>
+<text x="322" y="479" class="m" fill="#e6e6e6" font-weight="700">ship it</text>
+<text x="250" y="119" class="t" text-anchor="end">Each rewind leaves a branch</text>
+<text x="250" y="138" class="d" text-anchor="end">the turns you rewound past, in</text>
+<text x="250" y="156" class="d" text-anchor="end">a colour of their own</text>
+<path d="M258 114H301.5" class="lead" marker-end="url(#tip)"/>
+<text x="250" y="224" class="t" text-anchor="end">Branches nest</text>
+<text x="250" y="243" class="d" text-anchor="end">a branch of a branch forks</text>
+<text x="250" y="261" class="d" text-anchor="end">one lane further in</text>
+<path d="M258 216L319.5 187" class="lead" marker-end="url(#tip)"/>
+<path d="M258 222L337.5 257" class="lead" marker-end="url(#tip)"/>
+<text x="250" y="359" class="t" text-anchor="end">● The line you’re on</text>
+<text x="250" y="378" class="d" text-anchor="end">in the accent colour, from</text>
+<text x="250" y="396" class="d" text-anchor="end">the first prompt down to ◉</text>
+<path d="M258 354H286.5" class="lead" marker-end="url(#tip)"/>
+<text x="250" y="479" class="t" text-anchor="end">◉ Where you are</text>
+<text x="250" y="498" class="d" text-anchor="end">its row is lit</text>
+<path d="M258 474H281.5" class="lead" marker-end="url(#tip)"/>
+<text x="700" y="311" class="t" text-anchor="start">Click a prompt on any branch</text>
+<text x="700" y="330" class="d" text-anchor="start">its last reply opens under it</text>
+<path d="M692 306H510" class="lead" marker-end="url(#tip)"/>
+<text x="700" y="368" class="t" text-anchor="start">↪ continue here</text>
+<text x="700" y="387" class="d" text-anchor="start">switches the session to this</text>
+<text x="700" y="405" class="d" text-anchor="start">turn: see below</text>
+<path d="M692 363L546 354" class="lead" marker-end="url(#tip)"/>
+<text x="700" y="432" class="t" text-anchor="start">copy /resume-at</text>
+<text x="700" y="451" class="d" text-anchor="start">the command that opens this</text>
+<text x="700" y="469" class="d" text-anchor="start">turn from another terminal</text>
+<path d="M692 427L645 380" class="lead" marker-end="url(#tip)"/>
+<path d="M470 510V576" stroke="#4f8ad0" stroke-width="2.5" fill="none" marker-end="url(#big)"/>
+<rect x="490" y="524" width="153" height="22" fill="#4f8ad0"/>
+<text x="566.5" y="540" class="m" text-anchor="middle" font-weight="700" fill="#111111">↪ continue here</text>
+<text x="490" y="568" class="d">The card closes, and the tree keeps its shape:</text>
+<text x="490" y="586" class="d">only the accent line and ◉ move.</text>
+<text x="270" y="608" class="tag">AFTER: AT TURN 7, ON THAT BRANCH</text>
+<rect x="270" y="622" width="400" height="364" rx="10" fill="#262626" stroke="#3d3f4c"/>
+<rect x="276" y="852" width="388" height="24" rx="3" fill="#393b47"/>
+<path d="M290.5 660V684" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M290.5 684V924" stroke="#a98bf0" stroke-width="1.6" fill="none"/>
+<path d="M308.5 732V756" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M308.5 756V900" stroke="#4fa597" stroke-width="1.6" fill="none"/>
+<path d="M326.5 804V828" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M326.5 828V876" stroke="#e35ea9" stroke-width="1.6" fill="none"/>
+<circle cx="290.5" cy="648" r="4" fill="#d77757"/>
+<text x="304" y="653" class="m" fill="#8a8a8a">1</text>
+<text x="322" y="653" class="m" fill="#e6e6e6">add a settings page</text>
+<path d="M290.5 672H295" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M295 672H303.5Q308.5 672 308.5 677V684" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<circle cx="308.5" cy="696" r="4" fill="#d77757"/>
+<text x="322" y="701" class="m" fill="#8a8a8a">2</text>
+<text x="340" y="701" class="m" fill="#e6e6e6">put it in a modal</text>
+<circle cx="308.5" cy="720" r="4" fill="#d77757"/>
+<text x="322" y="725" class="m" fill="#8a8a8a">3</text>
+<text x="340" y="725" class="m" fill="#e6e6e6">add a theme picker</text>
+<path d="M308.5 744H313" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M313 744H321.5Q326.5 744 326.5 749V756" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<circle cx="326.5" cy="768" r="4" fill="#d77757"/>
+<text x="340" y="773" class="m" fill="#8a8a8a">4</text>
+<text x="358" y="773" class="m" fill="#e6e6e6">use a dropdown</text>
+<circle cx="326.5" cy="792" r="4" fill="#d77757"/>
+<text x="340" y="797" class="m" fill="#8a8a8a">5</text>
+<text x="358" y="797" class="m" fill="#e6e6e6">preview each theme</text>
+<path d="M326.5 816H331" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<path d="M331 816H339.5Q344.5 816 344.5 821V828" stroke="#d77757" stroke-width="1.6" fill="none"/>
+<circle cx="344.5" cy="840" r="4" fill="#d77757"/>
+<text x="358" y="845" class="m" fill="#8a8a8a">6</text>
+<text x="376" y="845" class="m" fill="#e6e6e6">preview on hover</text>
+<circle cx="344.5" cy="864" r="5" fill="none" stroke="#d77757" stroke-width="1.5"/>
+<circle cx="344.5" cy="864" r="2.2" fill="#d77757"/>
+<text x="358" y="869" class="m" fill="#e6e6e6" font-weight="700">7</text>
+<text x="376" y="869" class="m" fill="#e6e6e6" font-weight="700">make it subtle</text>
+<circle cx="326.5" cy="888" r="3.8" fill="none" stroke="#e35ea9" stroke-width="1.5"/>
+<text x="340" y="893" class="m" fill="#e35ea9">6</text>
+<text x="358" y="893" class="m" fill="#e6e6e6">save it per device</text>
+<circle cx="308.5" cy="912" r="3.8" fill="none" stroke="#4fa597" stroke-width="1.5"/>
+<text x="322" y="917" class="m" fill="#4fa597">4</text>
+<text x="340" y="917" class="m" fill="#e6e6e6">use radio buttons</text>
+<circle cx="290.5" cy="936" r="3.8" fill="none" stroke="#a98bf0" stroke-width="1.5"/>
+<text x="304" y="941" class="m" fill="#a98bf0">2</text>
+<text x="322" y="941" class="m" fill="#e6e6e6">make it a full page</text>
+<circle cx="290.5" cy="960" r="3.8" fill="none" stroke="#a98bf0" stroke-width="1.5"/>
+<text x="304" y="965" class="m" fill="#a98bf0">3</text>
+<text x="322" y="965" class="m" fill="#e6e6e6">ship it</text>
+<text x="700" y="869" class="t" text-anchor="start">◉ Now you’re here</text>
+<text x="700" y="888" class="d" text-anchor="start">your next prompt carries on</text>
+<text x="700" y="906" class="d" text-anchor="start">from this turn</text>
+<path d="M692 864H510" class="lead" marker-end="url(#tip)"/>
+<path d="M684 672V816" class="lead"/>
+<path d="M684 672H318.5" class="lead" marker-end="url(#tip)"/>
+<path d="M684 744H336.5" class="lead" marker-end="url(#tip)"/>
+<path d="M684 816H354.5" class="lead" marker-end="url(#tip)"/>
+<path d="M684 744h10" class="lead"/>
+<text x="700" y="749" class="t" text-anchor="start">The accent line follows you</text>
+<text x="700" y="768" class="d" text-anchor="start">from the first prompt to ◉,</text>
+<text x="700" y="786" class="d" text-anchor="start">through each branch on the way</text>
+<text x="250" y="941" class="t" text-anchor="end">The line you left is a branch</text>
+<text x="250" y="960" class="d" text-anchor="end">in a colour of its own, kept whole:</text>
+<text x="250" y="978" class="d" text-anchor="end">click it to go back the same way</text>
+<path d="M258 936H282.5" class="lead" marker-end="url(#tip)"/>
+</svg>
