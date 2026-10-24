@@ -11,6 +11,8 @@ A pane beside the chat that shows every prompt in the current session, as a tree
 
 `/resume-at` points the session itself at the message, the way a rewind or the tree's "continue from here" does, so every branch stays in one session. A session open in another Claude Code window is never written to: it is copied instead, every branch included, and the copy opens at that message. `/resume-at --copy …` always copies. Ids can be shortened to their first characters, as long as they are unique.
 
+Once a session's transcript passes 5 MB, Claude Code only reads it from the last `/compact` (or auto-compaction) on, so a turn before that can't be continued in that session. The tree still shows those turns as a branch, and "continue here" or `/resume-at` on one opens a copy of the session instead: every branch included, with each compaction kept as a note, so any turn in it can be continued.
+
 The pane remembers whether it was open, and whether ctx is shown, between sessions. Each session opens on the tree.
 
 ## Install

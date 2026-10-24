@@ -186,8 +186,18 @@ const CONTINUE = ' ↪ continue here '
 const COPY = 'copy:'
 // Copies every message of a transcript, every branch, to `dst` under another
 // session's id: `from` and `to` are the two `"sessionId":"…"` pairs. Rows that
-// are not messages (titles, costs, checkpoints) stay with the original.
-const COPY_SCAN = `index($0, "\\"uuid\\":\\"") { gsub(from, to); print > dst }`
+// are not messages (titles, costs, checkpoints) stay with the original. Each
+// compaction is kept as a note, not a boundary, so Claude Code reads the copy
+// whole (see WHOLE_UP_TO): every branch can be resumed in it.
+const COPY_SCAN = `index($0, "\\"uuid\\":\\"") {
+  gsub(from, to)
+  sub(/"subtype":"compact_boundary"/, "\\"subtype\\":\\"informational\\"")
+  print > dst
+}`
+// Claude Code reads a transcript larger than this from its last compaction on,
+// and resumes it there: a message before that is out of its reach in that
+// session, and can only be resumed in a copy.
+const WHOLE_UP_TO = 5 * 1024 * 1024
 const RESUME_AT_USAGE =
   'Usage: /resume-at [--copy] <session-id>:<message-id>, or /resume-at <message-id> for this session.'
 // Each prompt's dot on its line: where the conversation stands, a prompt it
@@ -830,8 +840,55 @@ async function resume($: EngineInterface, sessionId: string): Promise<{ isResume
   return { isResumed: resumes !== before, said: resumed.text?.trim() ?? '' }
 }
 
+// Whether Claude Code, resuming the transcript, leaves the message out: the
+// transcript is past WHOLE_UP_TO and a compaction comes after the message.
+async function isOutOfReach($: EngineInterface, path: string, leaf: string): Promise<boolean> {
+  if ((await $.fs.stat(path)).size <= WHOLE_UP_TO) return false
+  const found = await $.process.run([
+    'grep',
+    '-n',
+    '-o',
+    '-F',
+    '-e',
+    '"subtype":"compact_boundary"',
+    '-e',
+    `"uuid":"${leaf}"`,
+    path,
+  ])
+  const lines = found.stdout.split('\n')
+  const at = lines.find(line => line.endsWith(`"uuid":"${leaf}"`))
+  const compacted = lines.findLast(line => line.endsWith('"compact_boundary"'))
+
+  return at !== undefined && compacted !== undefined && parseInt(compacted) > parseInt(at)
+}
+
+// Copies a session, every branch, into a new one beside it (COPY_SCAN).
+// Resolves the copy, or why it could not.
+async function copySession(
+  $: EngineInterface,
+  path: string,
+  sessionId: string,
+): Promise<{ path: string; sessionId: string } | string> {
+  const copyId = crypto.randomUUID()
+  const copyPath = `${path.slice(0, path.lastIndexOf('/'))}/${copyId}.jsonl`
+  const copied = await $.process.run([
+    'awk',
+    '-v',
+    `from="sessionId":"${sessionId}"`,
+    '-v',
+    `to="sessionId":"${copyId}"`,
+    '-v',
+    `dst=${copyPath}`,
+    COPY_SCAN,
+    path,
+  ])
+
+  return copied.exitCode === 0 ? { path: copyPath, sessionId: copyId } : `Couldn't copy session ${sessionId}: ${copied.stderr.trim()}`
+}
+
 // Points this session at the end of the prompt's turn, so the next turn grows
-// from there; every branch stays in the transcript.
+// from there; every branch stays in the transcript. A turn out of Claude
+// Code's reach there opens in a copy of the session instead.
 async function switchTo($: EngineInterface, id: string) {
   const turn = turns.get(id)
   const path = await transcriptPath($)
@@ -844,22 +901,31 @@ async function switchTo($: EngineInterface, id: string) {
   await update($, opened, () => '')
   const depth = (await read($, tree)).find(one => one.id === id)?.depth
   const sessionId = await $.session.id()
-  const unwritten = await pointAt($, path, sessionId, turn.end, turn.text)
+  const isInCopy = await isOutOfReach($, path, turn.end).catch(() => false)
+  const opening = isInCopy ? await copySession($, path, sessionId) : { path, sessionId }
+  if (typeof opening === 'string') {
+    $.ui.toast(opening)
+
+    return
+  }
+  const unwritten = await pointAt($, opening.path, opening.sessionId, turn.end, turn.text)
   if (unwritten !== undefined) {
     $.ui.toast(unwritten)
 
     return
   }
-  const { isResumed, said } = await resume($, sessionId)
+  const { isResumed, said } = await resume($, opening.sessionId)
   if (isResumed) {
-    $.ui.toast(`Back at turn ${depth ?? '?'}, “${cut(turn.text, 40)}”: your next prompt continues from there.`)
+    $.ui.toast(
+      `Back at turn ${depth ?? '?'}, “${cut(turn.text, 40)}”: your next prompt continues from there.${isInCopy ? ` It is before a compaction Claude Code no longer reads here, so this is ${opening.sessionId}, a copy of the session with every branch.` : ''}`,
+    )
 
     return
   }
 
   // The record stands, so the next resume opens the branch, as long as no
-  // turn is taken here first.
-  const command = `claude --resume ${sessionId}`
+  // turn is taken there first.
+  const command = `claude --resume ${opening.sessionId}`
   const isCopied = (await $.ui.copy({ text: command }).catch(() => ({ isCopied: false }))).isCopied
   $.ui.toast(
     `${said ? `${said} ` : ''}Branch saved: quit, then run ${command}${isCopied ? ' (copied)' : ''}.`,
@@ -926,7 +992,8 @@ async function promptEndingAt($: EngineInterface, path: string, leaf: string): P
 // pointed at the message, as a switch in the tree does. A session open in
 // another Claude Code window is never written to: its whole transcript, every
 // branch, is copied into a new session pointed at the message, and the copy is
-// opened; `--copy` asks for that always.
+// opened; so is one whose message Claude Code no longer reads there (see
+// WHOLE_UP_TO), and `--copy` asks for that always.
 async function resumeAt($: EngineInterface, args: string): Promise<{ text?: string }> {
   const words = args.trim().split(/\s+/).filter(word => word !== '')
   const isCopy = words[0] === '--copy'
@@ -967,24 +1034,9 @@ async function resumeAt($: EngineInterface, args: string): Promise<{ text?: stri
   const lastPrompt = await promptEndingAt($, path, leaf)
 
   const holder = isCurrent ? undefined : await openElsewhere($, sessionId)
-  let opening = { path, sessionId }
-  if (isCopy || holder !== undefined) {
-    const copyId = crypto.randomUUID()
-    const copyPath = `${path.slice(0, path.lastIndexOf('/'))}/${copyId}.jsonl`
-    const copied = await $.process.run([
-      'awk',
-      '-v',
-      `from="sessionId":"${sessionId}"`,
-      '-v',
-      `to="sessionId":"${copyId}"`,
-      '-v',
-      `dst=${copyPath}`,
-      COPY_SCAN,
-      path,
-    ])
-    if (copied.exitCode !== 0) return { text: `Couldn't copy session ${sessionId}: ${copied.stderr.trim()}` }
-    opening = { path: copyPath, sessionId: copyId }
-  }
+  const isPast = await isOutOfReach($, path, leaf).catch(() => false)
+  const opening = isCopy || holder !== undefined || isPast ? await copySession($, path, sessionId) : { path, sessionId }
+  if (typeof opening === 'string') return { text: opening }
 
   const unwritten = await pointAt($, opening.path, opening.sessionId, leaf, lastPrompt)
   if (unwritten !== undefined) return { text: unwritten }
@@ -993,8 +1045,10 @@ async function resumeAt($: EngineInterface, args: string): Promise<{ text?: stri
   // one has.
   $.clock.after(0, () => void openPointed($, opening.sessionId, sessionId, holder).catch(() => undefined))
 
+  const why = isCopy || holder !== undefined ? '' : ': the message is before a compaction Claude Code no longer reads there'
+
   return {
-    text: `Opening session ${opening.sessionId} at message ${leaf.slice(0, 8)}${opening.sessionId === sessionId ? '' : `, a copy of session ${sessionId}`}.`,
+    text: `Opening session ${opening.sessionId} at message ${leaf.slice(0, 8)}${opening.sessionId === sessionId ? '' : `, a copy of session ${sessionId}${why}`}.`,
   }
 }
 

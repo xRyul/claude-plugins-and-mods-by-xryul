@@ -50,13 +50,19 @@ const PROMPTS = [
 ]
 
 // The engine beneath the plugin, as far as these tests reach it: a transcript
-// whose tree is SCAN, and whose list is `prompts`, a store holding `stored`, a
-// shell that appends, and a `/resume` that takes or not.
+// of `size` bytes whose tree is SCAN, whose list is `prompts`, and in which
+// `found` is what a grep finds, a store holding `stored`, a shell that appends,
+// an awk that copies, and a `/resume` that takes or not.
 const engine = (
   on: On,
   resume?: () => Promise<unknown>,
   scan = SCAN,
-  { stored = {}, prompts = [] }: { stored?: Record<string, unknown>; prompts?: string[] } = {},
+  {
+    stored = {},
+    prompts = [],
+    size = 100,
+    found = '',
+  }: { stored?: Record<string, unknown>; prompts?: string[]; size?: number; found?: string } = {},
 ) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-20T14:00:00Z') })
   mock.store(on, stored)
@@ -66,6 +72,7 @@ const engine = (
   const copies: string[] = []
   const appended: string[][] = []
   const commands: string[] = []
+  const copied: string[][] = []
   on('command.register', () => ({ value: { command: 'timeline' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
@@ -76,15 +83,22 @@ const engine = (
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('fs.exists', () => ({ value: true }))
-  on('fs.stat', () => ({ value: { kind: 'file', size: 100, mtimeMs: 0, isLink: false, resolve: false } }))
+  on('fs.stat', () => ({ value: { kind: 'file', size, mtimeMs: 0, isLink: false, resolve: false } }))
   on('process.run', (_, e) => {
     const isTreeScan = e.argv[0] === 'awk' && e.argv[1]!.includes('last-prompt')
     if (e.argv[0] === 'sh') appended.push([...e.argv])
+    if (e.argv[0] === 'awk' && e.argv[1] === '-v') copied.push([...e.argv])
 
     return {
       value: {
         exitCode: 0,
-        stdout: isTreeScan ? scan.join('\n') : e.argv[0] === 'awk' ? prompts.join('\n') : '',
+        stdout: isTreeScan
+          ? scan.join('\n')
+          : e.argv[0] === 'grep'
+            ? found
+            : e.argv[0] === 'awk'
+              ? prompts.join('\n')
+              : '',
         stderr: '',
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -98,7 +112,7 @@ const engine = (
     return {}
   })
 
-  return { clock, toasts, copies, appended, commands }
+  return { clock, toasts, copies, appended, commands, copied }
 }
 
 const rows = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: unknown; text: string }[]> }) =>
@@ -399,6 +413,62 @@ test('continue from here points the session at the end of that turn and resumes 
   })
   expect(commands).toEqual(['/resume s1'])
   expect(toasts).toEqual(['Back at turn 4, “fourth”: your next prompt continues from there.'])
+  await ui.unmount()
+})
+
+// Claude Code reads a transcript past 5 MiB only from its last compaction on.
+const LONG = 6 * 1024 * 1024
+
+test('a turn before the last compaction of a long transcript continues in a copy of the session', async ($, on) => {
+  const { appended, commands, copied, toasts, clock } = engine(
+    on,
+    () => $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 'copy' } }),
+    SCAN,
+    { size: LONG, found: '12:"uuid":"d9"\n40:"subtype":"compact_boundary"' },
+  )
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'd' })
+  await ui.press({ key: 'switch:d' })
+
+  // The copy takes every row under its own id, its compactions kept as notes.
+  expect(copied).toHaveLength(1)
+  const [, , from, , to, , dst, script, source] = copied[0]!
+  const copyId = to!.slice('to="sessionId":"'.length, -1)
+  expect([from, dst, source]).toEqual(['from="sessionId":"s1"', `dst=/home/me/.claude/projects/-work/${copyId}.jsonl`, TRANSCRIPT])
+  expect(script).toContain('"subtype":"compact_boundary"')
+  expect(script).toContain('informational')
+
+  // It is the copy that is pointed at the turn, and resumed.
+  expect(appended.map(argv => argv[5])).toEqual([`/home/me/.claude/projects/-work/${copyId}.jsonl`])
+  expect(JSON.parse(appended[0]![4]!)).toEqual({
+    type: 'last-prompt',
+    lastPrompt: 'fourth',
+    leafUuid: 'd9',
+    explicit: true,
+    sessionId: copyId,
+  })
+  expect(commands).toEqual([`/resume ${copyId}`])
+  expect(toasts[0]).toContain(`so this is ${copyId}, a copy of the session with every branch`)
+  await ui.unmount()
+})
+
+test('a turn after the last compaction of a long transcript continues in the session itself', async ($, on) => {
+  const { commands, copied, clock } = engine(
+    on,
+    () => $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } }),
+    SCAN,
+    { size: LONG, found: '12:"subtype":"compact_boundary"\n40:"uuid":"d9"' },
+  )
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'd' })
+  await ui.press({ key: 'switch:d' })
+
+  expect(copied).toEqual([])
+  expect(commands).toEqual(['/resume s1'])
   await ui.unmount()
 })
 
