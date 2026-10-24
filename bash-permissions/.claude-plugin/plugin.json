@@ -1,7 +1,7 @@
 {
   "name": "bash-permissions",
-  "version": "0.1.0",
-  "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …) with a one-sentence explanation and a danger score. /bash-permissions shows the rules.",
+  "version": "0.2.0",
+  "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …), showing the whole command, a one-sentence explanation and a danger score. /bash-permissions shows the rules.",
   "author": { "name": "xRyul" },
   "license": "MIT",
   "types": "./types/index.d.ts",

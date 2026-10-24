@@ -5,7 +5,7 @@ A Claude Code marketplace with three plugins. Install only the ones you want.
 | Plugin | What it does |
 | --- | --- |
 | [dracula-theme-mod](./dracula-theme-mod) | Dracula transcript styling: tool call cards, coloured status lines, inline code pills and no dots |
-| [bash-permissions](./bash-permissions) | Asks before dangerous Bash commands, with a one-sentence explanation and a danger score |
+| [bash-permissions](./bash-permissions) | Asks before dangerous Bash commands, showing the whole command, a one-sentence explanation and a danger score |
 | [prompt-timeline](./prompt-timeline) | A pane listing this session's prompts; click one to jump to it, search them, or browse rewind branches |
 
 ## Install

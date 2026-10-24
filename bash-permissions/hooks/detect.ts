@@ -7,6 +7,17 @@ export interface DangerMatch {
 	rule: DangerRule;
 	/** argv the rule matched, wrappers removed. */
 	words: string[];
+	/** Every command in the script the rule matched, in order, with where its paths resolve. */
+	commands: MatchedCommand[];
+}
+
+/** One command a rule matched: its argv and what its paths resolve against at that point in the script. */
+export interface MatchedCommand {
+	words: string[];
+	cwd?: string;
+	variables?: Readonly<Record<string, string>>;
+	/** True when it runs on another machine (`ssh host '…'`). */
+	isRemote: boolean;
 }
 
 /** Where the command runs, so rules about paths can tell the project from the rest of the disk. */
@@ -528,15 +539,21 @@ function matchCommand(command: SimpleCommand, words: string[], depth: number, fo
 	if (effective.includes("--help") || effective.includes("--version")) return;
 	const writesTo = command.redirects.filter((redirect) => redirect.operator.includes(">")).map((redirect) => redirect.target);
 	const context = { ...scope, effective, writesTo, runsUnseenScript };
+	const matched: MatchedCommand = { words: effective, cwd: scope.cwd, variables: scope.variables, isRemote: scope.isRemote };
+	const record = (rule: DangerRule) => {
+		const match = found.get(rule.id);
+		if (match) match.commands.push(matched);
+		else found.set(rule.id, { rule, words: effective, commands: [matched] });
+	};
+	// A rule already found is still checked, so its match lists every command it covers (`rm a && rm b`).
 	for (const rule of DANGER_RULES) {
-		if (found.has(rule.id)) continue;
-		if (stages.some((raw) => rule.match({ ...context, raw }))) found.set(rule.id, { rule, words: effective });
+		if (stages.some((raw) => rule.match({ ...context, raw }))) record(rule);
 	}
 
 	const scriptInput = RULE_BY_ID.get("mysql-script-input");
 	const isClassicClient = effective[0] === "mysql" || effective[0] === "mariadb";
-	if (scriptInput && isClassicClient && command.hasStdinRedirect && !found.has(scriptInput.id)) {
-		found.set(scriptInput.id, { rule: scriptInput, words: effective });
+	if (scriptInput && isClassicClient && command.hasStdinRedirect && found.get(scriptInput.id)?.commands.at(-1) !== matched) {
+		record(scriptInput);
 	}
 }
 

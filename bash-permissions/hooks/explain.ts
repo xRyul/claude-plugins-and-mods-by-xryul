@@ -25,6 +25,8 @@ export interface ExplainInput {
 	ruleDescription: string;
 	/** The rule's severity, the score used when the model gives none. */
 	severity: number;
+	/** What the matched commands delete, named from their paths; replaces the built-in sentence when given. */
+	deletes?: string;
 }
 
 export interface Explanation {
@@ -147,13 +149,14 @@ function databaseDropFallback(command: string): string {
 
 export function fallbackExplanation(input: ExplainInput): Explanation {
 	let text: string;
-	if (input.ruleId === "git-push") text = gitPushFallback(input.command, false);
+	if (input.deletes) text = cleanUntrustedText(input.deletes);
+	else if (input.ruleId === "git-push") text = gitPushFallback(input.command, false);
 	else if (input.ruleId === "git-push-force") text = gitPushFallback(input.command, true);
 	else if (input.ruleId === "mysqladmin-drop" || input.ruleId === "pscale-database-delete") {
 		text = databaseDropFallback(input.command);
 	} else {
-		const description = cleanUntrustedText(input.ruleDescription).replace(/[.!?…]+$/, "");
-		text = `Runs ${description}, changing persistent or shared state that data, infrastructure, automation, or other users may depend on.`;
+		// Without a model only the rule is known, so say which rule asked rather than guess at the effect.
+		text = `Asks because the command matches: ${cleanUntrustedText(input.ruleDescription).replace(/[.!?…]+$/, "")}.`;
 	}
 
 	const dropsSql =

@@ -13,7 +13,7 @@
     {
       "name": "bash-permissions",
       "source": "./bash-permissions",
-      "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …) with a one-sentence explanation and a danger score. /bash-permissions shows the rules."
+      "description": "Asks before dangerous Bash commands (git push, gt submit, pscale deploy, mysql, …), showing the whole command, a one-sentence explanation and a danger score. /bash-permissions shows the rules."
     },
     {
       "name": "prompt-timeline",

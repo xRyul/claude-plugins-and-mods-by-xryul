@@ -1,15 +1,16 @@
 /** Rule IDs the person allowed for the rest of the session. */
 export type SessionAllowed = string[];
 
-/** What the question dialog draws above its options for one bash-permissions question. */
+/** What the question dialog draws for one bash-permissions question: the card above it and a note under each option. */
 export type PromptView = {
-	ruleId: string;
-	/** Other rules the same answer covers. */
-	alsoMatches: string[];
 	explanation: string;
 	dangerScore: number;
-	/** True when the model gave no explanation and the built-in sentence stands in. */
+	/** True when the model gave no explanation: the sentence is built in and the score is the rule's severity. */
 	isFallback: boolean;
+	/** The Bash call's own description, written by Claude; only when the model gave no explanation, absent when Claude gave none. */
+	claudeSays?: string;
+	/** What choosing each option does, keyed by its label. */
+	optionNotes: Record<string, string>;
 };
 
 /** Open questions, keyed by the question text the dialog shows. */

@@ -1,6 +1,10 @@
 # bash-permissions
 
-Asks before Claude runs a dangerous Bash command. The question shows a one-sentence explanation of what the command does and a danger score from 1 to 100.
+Asks before Claude runs a dangerous Bash command. The question shows the whole command, never shortened. Above it, a card shows the risk level and a one-sentence explanation of what the command does.
+
+The explanation and a danger score from 1 to 100 come from a model. If the model gives no answer, the mod writes the sentence itself, and the card shows the rule's fixed severity instead of a score. For deletes, that sentence names what would be removed, such as "Deletes 2 items in ~/.claude/session-env with everything inside". The card then also shows the reason Claude gave for the command.
+
+The answers name the rules they switch off. "Allow rm-rf, rm for session" and "Always allow rm-rf, rm" allow every command those rules catch, not only this one. A note under each answer says what it does.
 
 By default it asks for commands that change shared state or cannot be undone, including:
 
@@ -26,9 +30,9 @@ Set these with `/plugin configure bash-permissions@plugins-and-mods-by-xryul`.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `alwaysAllow` | empty | Rule IDs that never ask, comma separated. Choosing "Always allow" in the question adds to this list. |
+| `alwaysAllow` | empty | Rule IDs that never ask, comma separated. Choosing "Always allow …" in the question adds the rules it names to this list. |
 | `alwaysAsk` | empty | Rule IDs that are off by default but should ask, comma separated. |
-| `explain` | on | Asks a model for the explanation and danger score. Off: a built-in sentence and the rule's severity. |
+| `explain` | on | Asks a model for the explanation and danger score. Off: the mod's own sentence and the rule's severity. |
 | `model` | `haiku` | The model alias or ID used for the explanation. |
 
 With `explain` on, each question makes one small model call, which counts towards your usage.

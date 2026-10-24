@@ -7,9 +7,17 @@ const SURFACES = ["terminal", "desktop", "vscode", "mobile"] as const;
 
 type Model = "answers" | "fails";
 
-/** Stands for Claude Code's own question dialog, the node bash-permissions's card sits above. */
+/**
+ * Stands for Claude Code's own question dialog, the node bash-permissions's card sits above.
+ * Returns the questions it was handed to draw, as bash-permissions passed them on.
+ */
 function engineDialog(on: On) {
-	on("ui.render", { component: "AskUserQuestion" }, () => ({ type: "engine" as const, ref: 0 }));
+	const drawn: unknown[][] = [];
+	on("ui.render", { component: "AskUserQuestion" }, (_, e) => {
+		drawn.push(e.props.questions);
+		return { type: "engine" as const, ref: 0 };
+	});
+	return drawn;
 }
 
 /**
@@ -21,7 +29,7 @@ function engineDialog(on: On) {
 function engine($: Engine, on: On, answer: string, verdict: "allow" | "ask" | "deny" = "allow", model: Model = "answers") {
 	const asked: string[] = [];
 	const cards: string[] = [];
-	engineDialog(on);
+	const dialogs = engineDialog(on);
 	on("session.cwd", () => ({ value: "/home/u/myapp" }));
 	on("tool.check", () => ({ decision: verdict }));
 	on("model.complete", () => ({
@@ -45,13 +53,19 @@ function engine($: Engine, on: On, answer: string, verdict: "allow" | "ask" | "d
 		}
 		return { result: { questions: e.questions, answers: { [question]: answer } } };
 	});
-	return { asked, cards };
+	return { asked, cards, dialogs };
 }
 
 let calls = 0;
-/** The permission check of one call the model made. */
-function bash(command: string) {
-	return { tool: "Bash", input: { command }, tool_use_id: `toolu_test_${++calls}` };
+/** The permission check of one call the model made, with the description Claude gave it, if any. */
+function bash(command: string, description?: string) {
+	return { tool: "Bash", input: description ? { command, description } : { command }, tool_use_id: `toolu_test_${++calls}` };
+}
+
+/** The options of a question, as `label: description` lines. */
+function optionLines(questions: unknown[] | undefined): string[] {
+	const [first] = (questions ?? []) as Array<{ options?: Array<{ label: string; description?: string }> }>;
+	return (first?.options ?? []).map((option) => `${option.label}: ${option.description ?? ""}`);
 }
 
 test("asks before a force push and allows it once", async ($, on) => {
@@ -61,7 +75,7 @@ test("asks before a force push and allows it once", async ($, on) => {
 	expect(verdict.decision).toBe("allow");
 });
 
-test("the card shows risk, explanation and rules on every surface", async ($, on) => {
+test("the card shows risk and explanation on every surface", async ($, on) => {
 	const { cards } = engine($, on, "Reject");
 	await $.tool.check(bash("git push --force origin main"));
 	expect(cards.length).toBe(SURFACES.length);
@@ -69,8 +83,68 @@ test("the card shows risk, explanation and rules on every surface", async ($, on
 		expect(card).toContain("HIGH RISK");
 		expect(card).toContain("72");
 		expect(card).toContain("Overwrites main on origin with your local history.");
-		expect(card).toContain("git-push-force · also git-push");
 	}
+});
+
+test("the question shows the whole command, however long", async ($, on) => {
+	const command = `ls -la ${"/var/data/".repeat(30)} && rm -r /var/cache/old && echo done`;
+	const { asked } = engine($, on, "Reject");
+	await $.tool.check(bash(command));
+	expect(asked).toEqual([`Run ${command}?`]);
+});
+
+test("each option says what it allows, naming the rules", async ($, on) => {
+	const { dialogs } = engine($, on, "Reject");
+	await $.tool.check(bash("git push --force origin main"));
+	expect(optionLines(dialogs[0])).toEqual([
+		"Allow once: Runs this command. Asks again next time.",
+		"Allow git-push-force, git-push for session: Stops asking about git-push-force and git-push until you quit Claude Code.",
+		"Always allow git-push-force, git-push: Saved to settings: never asks about git-push-force and git-push again.",
+		"Reject: Blocks it and tells Claude not to retry.",
+	]);
+});
+
+test("without a model, the card shows the reason Claude gave for the command", async ($, on) => {
+	const { cards } = engine($, on, "Reject", "allow", "fails");
+	await $.tool.check(bash("git push --force origin main", "Publish the rebased branch"));
+	expect(cards[0]).toContain("Claude's reason: Publish the rebased branch");
+});
+
+test("with a model's sentence, Claude's reason is left out as a repeat", async ($, on) => {
+	const { cards } = engine($, on, "Reject");
+	await $.tool.check(bash("git push --force origin main", "Publish the rebased branch"));
+	expect(cards[0]).toContain("Overwrites main on origin with your local history.");
+	expect(cards[0]).not.toContain("Claude's reason");
+});
+
+test("a long delete sentence and a long reason still fit the terminal dialog", async ($, on) => {
+	const reason = "Build a demo folder in the scratchpad, list it, then delete it in steps";
+	const command = `rm ${Array.from({ length: 12 }, (_, i) => `/var/app-${i}/data/file.txt`).join(" ")}`;
+	engineDialog(on);
+	on("tool.check", () => ({ decision: "allow" }));
+	on("model.complete", () => ({ value: { isAnswered: false as const, reason: "aborted" as const, usage: NO_USAGE } }));
+	on("tool.call", { tool: "AskUserQuestion" }, async (_, e) => {
+		const ui = await $.ui.mount({
+			plugin: "bash-permissions",
+			surface: "terminal",
+			component: "AskUserQuestion",
+			props: { tool: "AskUserQuestion", questions: e.questions },
+		});
+		const drawn = JSON.stringify(await ui.drawn());
+		expect(drawn).toContain(`Claude's reason: ${reason}`);
+		expect(drawn).toContain('"type":"engine"');
+		await ui.unmount();
+		return { result: { questions: e.questions, answers: { [e.questions[0]?.question ?? ""]: "Reject" } } };
+	});
+	await $.tool.check(bash(command, `${reason}. ${"More detail. ".repeat(20)}`));
+	await $.tool.check(bash(command, reason));
+});
+
+test("without a model, a delete names what it removes", async ($, on) => {
+	const { cards } = engine($, on, "Reject", "allow", "fails");
+	await $.tool.check(bash("P=/var/data/sessions && rm $P/a.jsonl $P/b.jsonl && rm -r /var/cache/one /var/cache/two"));
+	expect(cards[0]).toContain("Deletes 2 items in /var/cache with everything inside, and 2 files in /var/data/sessions.");
+	expect(cards[0]).toContain("rule severity 100");
 });
 
 test("a long explanation and command still fit the terminal dialog", async ($, on) => {
@@ -114,7 +188,7 @@ test("a dismissed dialog blocks the command", async ($, on) => {
 });
 
 test("allow for session stops asking about that rule", async ($, on) => {
-	const { asked } = engine($, on, "Allow for session");
+	const { asked } = engine($, on, "Allow git-push-force, git-push for session");
 	const first = await $.tool.check(bash("git push --force origin main"));
 	const second = await $.tool.check(bash("git push -f origin other"));
 	expect(asked.length).toBe(1);
@@ -127,7 +201,7 @@ test("always allow saves the rules to settings", async ($, on) => {
 		saved.push({ key: e.key, value: e.value });
 		return { value: e.value };
 	});
-	engine($, on, "Always allow");
+	engine($, on, "Always allow git-push-force, git-push");
 	const verdict = await $.tool.check(bash("git push --force origin main"));
 	expect(verdict.decision).toBe("allow");
 	expect(saved).toEqual([{ key: "bash-permissions.alwaysAllow", value: "git-push-force, git-push" }]);
@@ -138,7 +212,7 @@ test("a model that fails still gets a prompt, with the built-in sentence", async
 	const verdict = await $.tool.check(bash("git push origin main"));
 	expect(cards[0]).toContain("Pushes local commits and refs to origin");
 	expect(cards[0]).toContain("HIGH RISK");
-	expect(cards[0]).toContain("no model");
+	expect(cards[0]).toContain("rule severity 70");
 	expect(verdict.decision).toBe("deny");
 });
 
