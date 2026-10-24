@@ -144,6 +144,15 @@ END {
 const REPLY = 320
 // What a card's switch button's key opens with, before the prompt's id.
 const SWITCH = 'switch:'
+// What a card's copy button's key opens with, before the prompt's id: it
+// copies the `/resume-at` command that opens the session at that turn.
+const COPY = 'copy:'
+// Copies every message of a transcript, every branch, to `dst` under another
+// session's id: `from` and `to` are the two `"sessionId":"…"` pairs. Rows that
+// are not messages (titles, costs, checkpoints) stay with the original.
+const COPY_SCAN = `index($0, "\\"uuid\\":\\"") { gsub(from, to); print > dst }`
+const RESUME_AT_USAGE =
+  'Usage: /resume-at [--copy] <session-id>:<message-id>, or /resume-at <message-id> for this session.'
 // The mark of a prompt on a branch a rewind left: the conversation's own
 // prompts show their turn number in its place.
 const OFF = '○'
@@ -340,10 +349,16 @@ function contextTone(percent: number | undefined) {
   return { dimColor: true }
 }
 
+// The Claude Code folder that holds every project's transcripts.
+async function configDir($: EngineInterface): Promise<string | undefined> {
+  const home = await $.env.get('HOME')
+
+  return (await $.env.get('CLAUDE_CONFIG_DIR')) ?? (home && `${home}/.claude`)
+}
+
 async function transcriptPath($: EngineInterface): Promise<string | undefined> {
   const id = await $.session.id()
-  const home = await $.env.get('HOME')
-  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? (home && `${home}/.claude`)
+  const config = await configDir($)
   if (!config) return undefined
 
   const projects = `${config}/projects`
@@ -618,23 +633,64 @@ async function toggleTree($: EngineInterface) {
   void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
 }
 
-// A prompt the conversation passes through is in the transcript: scroll to
-// it. One a rewind abandoned is not: open its card, or close it.
+// A press opens the prompt's card, or closes it. A prompt the conversation
+// passes through is in the transcript too: the press scrolls to it.
 async function pick($: EngineInterface, id: string) {
   const node = (await read($, tree)).find(one => one.id === id)
-  if (node?.place !== 'off') {
-    await update($, opened, () => '')
-    await jump($, id)
-
-    return
-  }
+  if (node?.place !== 'off') await jump($, id)
   await update($, opened, shown => (shown === id ? '' : id))
 }
 
-// Points the session at the end of the prompt's turn, the way a rewind does,
-// with a `last-prompt` record naming its last row, then resumes the session so
-// the conversation reads from there. No row is changed or removed: every
-// branch stays in the transcript, and the next turn grows from the switch.
+// Copies the command that opens this session at the end of the prompt's turn
+// from another terminal, the message named by its first eight characters as
+// the status line names it.
+async function copyResume($: EngineInterface, id: string) {
+  const end = turns.get(id)?.end
+  if (!end) {
+    $.ui.toast("Couldn't find that turn in the transcript.")
+
+    return
+  }
+  const command = `/resume-at ${await $.session.id()}:${end.slice(0, 8)}`
+  const { isCopied } = await $.ui.copy({ text: command }).catch(() => ({ isCopied: false }))
+  $.ui.toast(isCopied ? `Copied ${command}` : `Couldn't copy it: ${command}`)
+}
+
+// Points a session at a message with a `last-prompt` record, the one Claude
+// Code writes when it rewinds: resuming the session follows the last one
+// written. No row is changed or removed. Resolves why not, if it could not.
+async function pointAt(
+  $: EngineInterface,
+  path: string,
+  sessionId: string,
+  leaf: string,
+  lastPrompt: string,
+): Promise<string | undefined> {
+  const record = JSON.stringify({
+    type: 'last-prompt',
+    ...(lastPrompt === '' ? {} : { lastPrompt }),
+    leafUuid: leaf,
+    explicit: true,
+    sessionId,
+  })
+  const wrote = await $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', record, path])
+
+  return wrote.exitCode === 0 ? undefined : `Couldn't write to the transcript: ${wrote.stderr.trim()}`
+}
+
+// Resumes a session, so the conversation reads from where it was pointed.
+// Resolves whether the resume took, and what `/resume` said.
+async function resume($: EngineInterface, sessionId: string): Promise<{ isResumed: boolean; said: string }> {
+  const before = resumes
+  const resumed = await $.command
+    .run({ command: 'resume', args: sessionId })
+    .catch((error: unknown) => ({ text: String(error) }))
+
+  return { isResumed: resumes !== before, said: resumed.text?.trim() ?? '' }
+}
+
+// Points this session at the end of the prompt's turn, so the next turn grows
+// from there; every branch stays in the transcript.
 async function switchTo($: EngineInterface, id: string) {
   const turn = turns.get(id)
   const path = await transcriptPath($)
@@ -644,28 +700,17 @@ async function switchTo($: EngineInterface, id: string) {
     return
   }
 
+  await update($, opened, () => '')
+  const depth = (await read($, tree)).find(one => one.id === id)?.depth
   const sessionId = await $.session.id()
-  const record = JSON.stringify({
-    type: 'last-prompt',
-    lastPrompt: turn.text,
-    leafUuid: turn.end,
-    explicit: true,
-    sessionId,
-  })
-  const wrote = await $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', record, path])
-  if (wrote.exitCode !== 0) {
-    $.ui.toast(`Couldn't write to the transcript: ${wrote.stderr.trim()}`)
+  const unwritten = await pointAt($, path, sessionId, turn.end, turn.text)
+  if (unwritten !== undefined) {
+    $.ui.toast(unwritten)
 
     return
   }
-
-  await update($, opened, () => '')
-  const depth = (await read($, tree)).find(one => one.id === id)?.depth
-  const before = resumes
-  const resumed = await $.command
-    .run({ command: 'resume', args: sessionId })
-    .catch((error: unknown) => ({ text: String(error) }))
-  if (resumes !== before) {
+  const { isResumed, said } = await resume($, sessionId)
+  if (isResumed) {
     $.ui.toast(`Back at turn ${depth ?? '?'}, “${cut(turn.text, 40)}”: your next prompt continues from there.`)
 
     return
@@ -676,8 +721,160 @@ async function switchTo($: EngineInterface, id: string) {
   const command = `claude --resume ${sessionId}`
   const isCopied = (await $.ui.copy({ text: command }).catch(() => ({ isCopied: false }))).isCopied
   $.ui.toast(
-    `${resumed.text ? `${resumed.text.trim()} ` : ''}Branch saved: quit, then run ${command}${isCopied ? ' (copied)' : ''}.`,
+    `${said ? `${said} ` : ''}Branch saved: quit, then run ${command}${isCopied ? ' (copied)' : ''}.`,
   )
+}
+
+// The transcripts, in any project, of the sessions whose id starts with
+// `prefix`.
+async function sessionFiles($: EngineInterface, prefix: string): Promise<string[]> {
+  const config = await configDir($)
+  const projects = `${config}/projects`
+  if (!config || !(await $.fs.exists(projects))) return []
+
+  const found: string[] = []
+  for (const dir of await $.fs.list(projects)) {
+    if (dir.kind !== 'dir') continue
+    for (const file of await $.fs.list(`${projects}/${dir.name}`)) {
+      if (file.kind === 'file' && file.name.startsWith(prefix) && file.name.endsWith('.jsonl')) {
+        found.push(`${projects}/${dir.name}/${file.name}`)
+      }
+    }
+  }
+
+  return found
+}
+
+// A Claude Code process that has the session open. Each process keeps a
+// record under sessions/ and leaves it behind when it exits, so only a record
+// whose process still runs counts.
+async function openElsewhere(
+  $: EngineInterface,
+  sessionId: string,
+): Promise<{ pid: number; jobId?: string } | undefined> {
+  const config = await configDir($)
+  if (!config) return undefined
+
+  const found = await $.process.run(['grep', '-l', '-r', '-F', `"sessionId":"${sessionId}"`, `${config}/sessions`])
+  for (const file of found.stdout.split('\n').filter(line => line.endsWith('.json'))) {
+    const record = await $.fs.read(file).then(
+      text => JSON.parse(text),
+      () => undefined,
+    )
+    if (typeof record?.pid !== 'number') continue
+    if ((await $.process.run(['kill', '-0', String(record.pid)])).exitCode !== 0) continue
+
+    return { pid: record.pid, jobId: typeof record.jobId === 'string' ? record.jobId : undefined }
+  }
+
+  return undefined
+}
+
+// The prompt whose turn ends at the message, one line of it, or ''.
+async function promptEndingAt($: EngineInterface, path: string, leaf: string): Promise<string> {
+  const scan = await $.process.run(['awk', TREE_SCAN, path])
+  for (const record of scan.stdout.split('\n')) {
+    const [kind, , , , end = '', text = ''] = record.split('\t')
+    if (kind === 'T' && end === leaf) return preview(decode(text))
+  }
+
+  return ''
+}
+
+// `/resume-at`: opens a session at one of its messages. The session itself is
+// pointed at the message, as a switch in the tree does. A session open in
+// another Claude Code window is never written to: its whole transcript, every
+// branch, is copied into a new session pointed at the message, and the copy is
+// opened; `--copy` asks for that always.
+async function resumeAt($: EngineInterface, args: string): Promise<{ text?: string }> {
+  const words = args.trim().split(/\s+/).filter(word => word !== '')
+  const isCopy = words[0] === '--copy'
+  const target = words[isCopy ? 1 : 0]
+  if (target === undefined || words.length !== (isCopy ? 2 : 1)) return { text: RESUME_AT_USAGE }
+  const [sessionPrefix, messagePrefix] = target.includes(':') ? target.split(':', 2) : ['', target]
+  if (!/^[0-9a-z-]*$/i.test(sessionPrefix!) || !/^[0-9a-f-]+$/i.test(messagePrefix!)) {
+    return { text: RESUME_AT_USAGE }
+  }
+
+  const current = await $.session.id()
+  const isCurrent = sessionPrefix === '' || current.startsWith(sessionPrefix!.toLowerCase())
+  const here = isCurrent ? await transcriptPath($) : undefined
+  const paths = isCurrent ? (here === undefined ? [] : [here]) : await sessionFiles($, sessionPrefix!.toLowerCase())
+  if (paths.length !== 1) {
+    return {
+      text:
+        paths.length === 0
+          ? `No session's id starts with ${sessionPrefix}.`
+          : `${paths.length} sessions' ids start with ${sessionPrefix}: give more of the id.`,
+    }
+  }
+  const path = paths[0]!
+  const sessionId = path.slice(path.lastIndexOf('/') + 1, -'.jsonl'.length)
+
+  const prefix = messagePrefix!.toLowerCase()
+  const found = await $.process.run(['grep', '-o', '-E', `"uuid":"${prefix}[0-9a-f-]*"`, path])
+  const leaves = [...new Set(found.stdout.split('\n').filter(match => match !== '').map(match => match.slice(8, -1)))]
+  if (leaves.length !== 1) {
+    return {
+      text:
+        leaves.length === 0
+          ? `No message in session ${sessionId} has an id starting with ${messagePrefix}.`
+          : `${leaves.length} messages in session ${sessionId} have ids starting with ${messagePrefix}: give more of the id.`,
+    }
+  }
+  const leaf = leaves[0]!
+  const lastPrompt = await promptEndingAt($, path, leaf)
+
+  const holder = isCurrent ? undefined : await openElsewhere($, sessionId)
+  let opening = { path, sessionId }
+  if (isCopy || holder !== undefined) {
+    const copyId = crypto.randomUUID()
+    const copyPath = `${path.slice(0, path.lastIndexOf('/'))}/${copyId}.jsonl`
+    const copied = await $.process.run([
+      'awk',
+      '-v',
+      `from="sessionId":"${sessionId}"`,
+      '-v',
+      `to="sessionId":"${copyId}"`,
+      '-v',
+      `dst=${copyPath}`,
+      COPY_SCAN,
+      path,
+    ])
+    if (copied.exitCode !== 0) return { text: `Couldn't copy session ${sessionId}: ${copied.stderr.trim()}` }
+    opening = { path: copyPath, sessionId: copyId }
+  }
+
+  const unwritten = await pointAt($, opening.path, opening.sessionId, leaf, lastPrompt)
+  if (unwritten !== undefined) return { text: unwritten }
+
+  // A command cannot run another while it answers: `/resume` runs once this
+  // one has.
+  $.clock.after(0, () => void openPointed($, opening.sessionId, sessionId, holder).catch(() => undefined))
+
+  return {
+    text: `Opening session ${opening.sessionId} at message ${leaf.slice(0, 8)}${opening.sessionId === sessionId ? '' : `, a copy of session ${sessionId}`}.`,
+  }
+}
+
+// Resumes the session `/resume-at` pointed, and says how to open it if that
+// did not take, or why it is a copy if it is one.
+async function openPointed(
+  $: EngineInterface,
+  opening: string,
+  sessionId: string,
+  holder: { pid: number; jobId?: string } | undefined,
+) {
+  const { isResumed, said } = await resume($, opening)
+  if (!isResumed) {
+    $.ui.toast(
+      `${said ? `${said} ` : ''}Session ${opening} is set to open at that message: run claude --resume ${opening} in its project folder.`,
+    )
+  } else if (holder !== undefined) {
+    $.ui.toast(
+      `Session ${sessionId} is open in another window, so this is a copy of it.${holder.jobId === undefined ? '' : ` To open it there: claude attach ${holder.jobId}`}`,
+    )
+  }
 }
 
 export const register: Register = on => {
@@ -685,6 +882,11 @@ export const register: Register = on => {
     await $.command.register({
       name: 'timeline',
       description: 'Show or hide the pane of this session’s prompts',
+    })
+    await $.command.register({
+      name: 'resume-at',
+      description: 'Open a session at one of its messages, keeping every branch',
+      argumentHint: '[--copy] <session-id>:<message-id>',
     })
     const started = await next(e)
     const isContextShown = (await $.store.get('showContext')) !== false
@@ -708,6 +910,8 @@ export const register: Register = on => {
 
     return started
   })
+
+  on('command.run', { command: 'resume-at' }, ($, e) => resumeAt($, e.args))
 
   on('command.run', { command: 'timeline' }, async $ => {
     const pane = (await $.ui.panes()).find(one => one.id === PANE)
@@ -910,9 +1114,14 @@ export const register: Register = on => {
 
     if (isTreeShown) {
       if (nodes.length === 0) return note('No prompts yet', 'Send one and it lands here.')
-      // A press on a prompt names its Button; on a card's switch, the switch's.
-      const pressTree = (pressed: UiPressArgument) =>
-        pressed.element.startsWith(SWITCH) ? switchTo($, pressed.element.slice(SWITCH.length)) : pick($, pressed.element)
+      // A press on a prompt names its Button; on a card's button, the button's.
+      const pressTree = (pressed: UiPressArgument) => {
+        const key = pressed.element
+        if (key.startsWith(SWITCH)) return switchTo($, key.slice(SWITCH.length))
+        if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length))
+
+        return pick($, key)
+      }
 
       return (
         <Box flexDirection="column" paddingLeft={1}>
@@ -929,7 +1138,7 @@ export const register: Register = on => {
             // where a deep branch leaves little room.
             const space = width - indent - mark.length
             const isAged = space - AGE_COLUMNS - 2 >= 12
-            const reply = turns.get(node.id)?.reply
+            const turn = turns.get(node.id)
 
             return (
               <Box flexDirection="column">
@@ -958,10 +1167,21 @@ export const register: Register = on => {
                     borderDimColor
                     paddingX={1}
                   >
-                    <Text dimColor>{reply || 'No reply in the transcript.'}</Text>
-                    <Button key={`${SWITCH}${node.id}`} plain onPress={pressTree}>
-                      <Text color={ACCENT}>↪ continue from here</Text>
-                    </Button>
+                    {/* The transcript already shows a reply on the conversation. */}
+                    {isOff && <Text dimColor>{turn?.reply || 'No reply in the transcript.'}</Text>}
+                    {/* The buttons stand apart from the reply, each in a colour of its own. */}
+                    <Box flexDirection="column" marginTop={isOff ? 1 : 0}>
+                      {isOff && (
+                        <Button key={`${SWITCH}${node.id}`} plain onPress={pressTree}>
+                          <Text color={ACCENT}>↪ continue from here</Text>
+                        </Button>
+                      )}
+                      {turn !== undefined && turn.end !== '' && (
+                        <Button key={`${COPY}${node.id}`} plain onPress={pressTree}>
+                          <Text color="suggestion">{`⧉ copy /resume-at …:${turn.end.slice(0, 8)}`}</Text>
+                        </Button>
+                      )}
+                    </Box>
                   </Box>
                 )}
               </Box>

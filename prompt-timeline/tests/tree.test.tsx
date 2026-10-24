@@ -154,13 +154,30 @@ test('a prompt on an abandoned branch opens a card with its reply', async ($, on
   await ui.press({ key: 'd' })
   expect(await ui.find({ type: 'Text', text: 'the border is "done"' })).toBeDefined()
   expect((await ui.find({ key: 'switch:d' }))?.text).toBe('↪ continue from here')
+  expect((await ui.find({ key: 'copy:d' }))?.text).toBe('⧉ copy /resume-at …:d9')
 
-  // A second press closes it; a prompt on the way here scrolls instead.
+  // A second press closes it. A prompt on the way here scrolls to it, and its
+  // card holds only the command: the transcript shows its reply.
   await ui.press({ key: 'd' })
   expect(await ui.find({ key: 'switch:d' })).toBeUndefined()
   await ui.press({ key: 'b' })
   expect(await ui.find({ key: 'switch:b' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'second reply' })).toBeUndefined()
+  expect((await ui.find({ key: 'copy:b' }))?.text).toBe('⧉ copy /resume-at …:b9')
   expect(toasts[0]).toContain("Couldn't scroll to that prompt")
+  await ui.unmount()
+})
+
+test("a card copies the command that opens the session at its turn from another terminal", async ($, on) => {
+  const { copies, toasts } = engine(on)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tree-toggle' })
+  await ui.press({ key: 'd' })
+  await ui.press({ key: 'copy:d' })
+
+  expect(copies).toEqual(['/resume-at s1:d9'])
+  expect(toasts).toEqual(['Copied /resume-at s1:d9'])
   await ui.unmount()
 })
 
