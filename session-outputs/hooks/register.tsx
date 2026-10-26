@@ -1,0 +1,982 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+
+import type {
+  Group,
+  ImageGroup,
+  SessionArtifact,
+  SessionFile,
+  SessionImage,
+} from '../types'
+
+const PANE = 'session-outputs'
+const TITLE = 'Outputs'
+const EXPLORER = '/mnt/c/Windows/explorer.exe'
+const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|bmp|svg|avif|tiff?|ico|heic)$/i
+// Documents a tool call writes. A text one's lines are counted, up to this size.
+const FILE_EXTENSION = /\.(pdf|docx?|odt|rtf|pptx?|odp|key|xlsx?|ods|csv|md|markdown|html?)$/i
+const TEXT_EXTENSION = /\.(csv|md|markdown|html?)$/i
+const MAX_TEXT_FILE = 2 * 1024 * 1024
+// The pane's word for an extension that is long.
+const EXTENSION_NAMES: Record<string, string> = { markdown: 'md', htm: 'html' }
+// The engine stores each pasted image as a file and records its path in the
+// conversation as this line.
+const PASTED_SOURCE = /\[Image: source: ([^\]\n]+)\]/g
+// The instructions a typed Artifact's first publish answers with open with
+// the type's name.
+const TYPE_NAME = /^name:\s*["']?([\w-]+)["']?\s*$/m
+// A doc the Claude Docs connector creates.
+const DOCS_TOOL = /Claude_Docs__(?:batch|create)$/
+const ARTIFACT_LINK = /https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+/
+// The pane's word for a type whose own name is long, and each kind's colour.
+const KIND_NAMES: Record<string, string> = { docs: 'doc', document: 'doc', dashboard: 'dash' }
+const KIND_COLORS: Record<string, string> = {
+  design: '#ff79c6',
+  dash: '#4eba65',
+  page: '#4fa597',
+  doc: '#b1b9f9',
+  slides: '#ffc107',
+}
+const YOURS = '#b1b9f9'
+const SELECTED = '#33354a'
+// A tool call's text is searched up to this length, for this many paths of
+// each kind, images and documents.
+const MAX_TEXT = 200_000
+const MAX_PATHS = 100
+// A session joined midway is searched for this many paths, its latest calls'
+// first, checked this many at a time.
+const MAX_BACKFILL_PATHS = 1000
+const STAT_BATCH = 50
+// Headers are read from files up to this size, in their first 256 KiB.
+const MAX_HEADER_FILE = 32 * 1024 * 1024
+const HEADER_BASE64 = 349_524
+// Rows a group shows before "Show more".
+const LIMIT = 5
+// The kind, time and detail columns after a row's name, and the least room a
+// name keeps before the columns go, from the right.
+const COLUMNS = [8, 7, 9]
+const MIN_NAME = 12
+// Characters a terminal draws two cells wide: CJK, Hangul, fullwidth forms
+// and emoji.
+const WIDE =
+  /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Change a tag when its value's fields change: it declines what an earlier
+// version stored, which outlives a reload.
+const images = atom({ plugin: 'session-outputs', key: 'images' } as const, [], {
+  shape: 'images-2',
+})
+const artifacts = atom({ plugin: 'session-outputs', key: 'artifacts' } as const, [], {
+  shape: 'artifacts-2',
+})
+const files = atom({ plugin: 'session-outputs', key: 'files' } as const, [], {
+  shape: 'files-1',
+})
+const typeNames = atom({ plugin: 'session-outputs', key: 'typeNames' } as const, {})
+const hasAutoOpened = atom(
+  { plugin: 'session-outputs', key: 'hasAutoOpened' } as const,
+  false,
+)
+const showAll = atom(
+  { plugin: 'session-outputs', key: 'showAll' } as const,
+  { artifacts: false, files: false, images: false },
+  { shape: 'groups-1' },
+)
+const selected = atom({ plugin: 'session-outputs', key: 'selected' } as const, '')
+
+type Found = { path: string; source: ImageGroup }
+type Block = { type: string; [field: string]: unknown }
+// A call to the Artifact tool or the Docs connector, with the tool's record of
+// it and the text the model read.
+type Call = { tool: string; input: Record<string, unknown>; result: unknown; text: string }
+
+// One row of the pane, whichever group it sits in.
+type Row = {
+  key: string
+  // What opening and copying it use: a link or a path.
+  target: string
+  isLink: boolean
+  name: string
+  // What "show in folder" shows: a file, selected in its folder, or a folder.
+  place?: { path: string; isFolder: boolean }
+  glyph?: { text: string; color: string }
+  kind: string
+  kindColor?: string
+  time: string
+  detail: string
+}
+
+function basename(path: string) {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+function dirname(path: string) {
+  return path.slice(0, path.lastIndexOf('/')) || '/'
+}
+
+function extension(path: string) {
+  const name = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+
+  return EXTENSION_NAMES[name] ?? name
+}
+
+// The last part of a link, its id: `abc` for both `claude.ai/artifact/abc`
+// and `claude.ai/artifact/abc/`.
+function lastPart(url: string) {
+  return basename(url.replace(/\/+$/, ''))
+}
+
+function recordOf(value: unknown) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function stringOf(value: unknown) {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function kindOf(typeName: string) {
+  const name = typeName.toLowerCase()
+
+  return KIND_NAMES[name] ?? name
+}
+
+function textsOf(blocks: readonly Block[]) {
+  return blocks.flatMap(block =>
+    block.type === 'text' && typeof block.text === 'string' ? [block.text] : [],
+  )
+}
+
+// Every string inside a tool's input or result, skipping inline media.
+function stringsIn(value: unknown, out: string[] = []) {
+  if (typeof value === 'string') {
+    out.push(value)
+  } else if (Array.isArray(value)) {
+    value.forEach(item => stringsIn(item, out))
+  } else if (value !== null && typeof value === 'object') {
+    const { type } = value as { type?: unknown }
+    if (type !== 'image' && type !== 'document') {
+      Object.values(value).forEach(item => stringsIn(item, out))
+    }
+  }
+
+  return out
+}
+
+// The image and document paths one call's texts name, each kind counted on
+// its own, so a listing of many documents cannot crowd out an image.
+function outputTokens(texts: readonly string[]) {
+  const imagePaths = new Set<string>()
+  const documentPaths = new Set<string>()
+  for (const text of texts) {
+    for (const raw of text.slice(0, MAX_TEXT).split(/[\s"'`<>()[\]{}|;,=]+/)) {
+      const token = raw.replace(/[.:!?]+$/, '')
+      if (token.includes('://')) continue
+      if (IMAGE_EXTENSION.test(token)) {
+        if (imagePaths.size < MAX_PATHS) imagePaths.add(token)
+      } else if (FILE_EXTENSION.test(token) && documentPaths.size < MAX_PATHS) {
+        documentPaths.add(token)
+      }
+    }
+  }
+
+  return [...imagePaths, ...documentPaths]
+}
+
+// Turns a path a tool call named into an absolute one, against `base` or the
+// session's folder.
+async function resolver($: EngineInterface) {
+  const home = (await $.env.get('HOME')) ?? ''
+  const cwd = await $.session.cwd()
+
+  return (path: string, base = cwd) =>
+    path.startsWith('~/') ? home + path.slice(1) : path.startsWith('/') ? path : `${base}/${path}`
+}
+
+// Where an absolute path leads, links followed, without a trailing slash.
+async function realPath($: EngineInterface, path: string) {
+  const trimmed = path.replace(/(.)\/+$/, '$1')
+  const stat = await $.fs.stat(trimmed, { resolve: true }).catch(() => undefined)
+
+  return stat?.realPath ?? trimmed
+}
+
+// The pixel size a PNG, GIF or JPEG header states.
+function pixelSize(bytes: Uint8Array) {
+  const at = (i: number) => bytes[i] ?? 0
+  const u16 = (i: number) => (at(i) << 8) | at(i + 1)
+  const u32 = (i: number) => ((u16(i) << 16) | u16(i + 2)) >>> 0
+
+  if (at(0) === 0x89 && at(1) === 0x50) return { width: u32(16), height: u32(20) }
+  if (at(0) === 0x47 && at(1) === 0x49) {
+    return { width: at(6) | (at(7) << 8), height: at(8) | (at(9) << 8) }
+  }
+  if (at(0) === 0xff && at(1) === 0xd8) {
+    // Walk the segments to the frame header (SOF0 to SOF15, less DHT, JPG, DAC).
+    for (let i = 2; i + 9 < bytes.length && at(i) === 0xff; i += 2 + u16(i + 2)) {
+      const marker = at(i + 1)
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { width: u16(i + 7), height: u16(i + 5) }
+      }
+    }
+  }
+
+  return {}
+}
+
+async function describe($: EngineInterface, found: Found) {
+  const stat = await $.fs.stat(found.path).catch(() => undefined)
+  if (stat?.kind !== 'file') return undefined
+
+  let size = {}
+  if (stat.size <= MAX_HEADER_FILE) {
+    const bytes = await $.fs.read(found.path, { as: 'bytes' }).catch(() => undefined)
+    if (bytes) {
+      const head = atob(bytes.base64.slice(0, HEADER_BASE64))
+      size = pixelSize(Uint8Array.from(head, char => char.charCodeAt(0)))
+    }
+  }
+
+  return { ...found, modifiedAt: stat.mtimeMs, ...size }
+}
+
+async function describeFile($: EngineInterface, path: string) {
+  const stat = await $.fs.stat(path).catch(() => undefined)
+  if (stat?.kind !== 'file') return undefined
+
+  const file: SessionFile = { path, modifiedAt: stat.mtimeMs, size: stat.size }
+  if (TEXT_EXTENSION.test(path) && stat.size <= MAX_TEXT_FILE) {
+    const text = await $.fs.read(path, { as: 'text' }).catch(() => undefined)
+    if (typeof text === 'string') {
+      file.lines = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+    }
+  }
+
+  return file
+}
+
+// The pasted images the texts name, plus every image in the folders they sit
+// in, so images whose lines a compaction dropped are still found.
+async function findPasted($: EngineInterface, texts: readonly string[]) {
+  const paths = texts.flatMap(text =>
+    [...text.matchAll(PASTED_SOURCE)].flatMap(match =>
+      match[1] ? [match[1].trim()] : [],
+    ),
+  )
+  const folders = [...new Set(paths.map(dirname))]
+  const listed = await Promise.all(
+    folders.map(async folder => {
+      const entries = await $.fs.list(folder).catch(() => [])
+
+      return entries
+        .filter(entry => entry.kind === 'file' && IMAGE_EXTENSION.test(entry.name))
+        .map(entry => `${folder}/${entry.name}`)
+    }),
+  )
+
+  return [...paths, ...listed.flat()]
+}
+
+// The image and document files the tokens name that were written at or after
+// `since`.
+async function findCreated(
+  $: EngineInterface,
+  tokens: readonly string[],
+  since: number,
+) {
+  if (tokens.length === 0) return []
+
+  const resolve = await resolver($)
+  const found: string[] = []
+  for (let i = 0; i < tokens.length; i += STAT_BATCH) {
+    const batch = await Promise.all(
+      tokens.slice(i, i + STAT_BATCH).map(async token => {
+        const path = resolve(token)
+        const stat = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
+
+        return stat?.kind === 'file' && stat.mtimeMs >= since ? [stat.realPath ?? path] : []
+      }),
+    )
+    found.push(...batch.flat())
+  }
+
+  return [...new Set(found)]
+}
+
+// The pane opens by itself the first time a session has something to list.
+async function openOnce($: EngineInterface) {
+  if (!(await read($, hasAutoOpened))) {
+    await update($, hasAutoOpened, () => true)
+    void $.ui.open({ id: PANE, title: TITLE })
+  }
+}
+
+// A pasted image never changes, so one already listed is left alone; an image
+// a tool call writes again is read afresh, for its new time and size.
+async function addImages($: EngineInterface, found: readonly Found[]) {
+  const known = new Map((await read($, images)).map(image => [image.path, image]))
+  const fresh = new Map<string, Found>()
+  for (const image of found) {
+    const stored = known.get(image.path)
+    if (!stored || (stored.source === 'claude' && image.source === 'claude')) {
+      fresh.set(image.path, image)
+    }
+  }
+  if (fresh.size === 0) return
+
+  const described = await Promise.all([...fresh.values()].map(image => describe($, image)))
+  const added = described.filter(image => image !== undefined)
+  if (added.length === 0) return
+
+  const changed = new Set(added.map(image => image.path))
+  await update($, images, list => [...list.filter(image => !changed.has(image.path)), ...added])
+  await openOnce($)
+}
+
+// A file written again replaces what was stored for it.
+async function addFiles($: EngineInterface, paths: readonly string[]) {
+  const described = await Promise.all([...new Set(paths)].map(path => describeFile($, path)))
+  const added = described.filter(file => file !== undefined)
+  if (added.length === 0) return
+
+  const changed = new Set(added.map(file => file.path))
+  await update($, files, list => [...list.filter(file => !changed.has(file.path)), ...added])
+  await openOnce($)
+}
+
+async function addCreated($: EngineInterface, paths: readonly string[]) {
+  await addImages(
+    $,
+    paths
+      .filter(path => IMAGE_EXTENSION.test(path))
+      .map(path => ({ path, source: 'claude' as const })),
+  )
+  await addFiles(
+    $,
+    paths.filter(path => FILE_EXTENSION.test(path)),
+  )
+}
+
+async function nameType($: EngineInterface, typeUrl: unknown, typeName: unknown) {
+  const url = stringOf(typeUrl)
+  const name = stringOf(typeName)
+  if (!url || !name) return
+
+  const kind = kindOf(name)
+  if ((await read($, typeNames))[url] !== kind) {
+    await update($, typeNames, names => ({ ...names, [url]: kind }))
+  }
+}
+
+// The local paths a publish's `files` takes its files from, against the
+// Artifact's folder: a list's paths, or a map's sources (a copy from another
+// Artifact has none).
+function supportingPaths(value: unknown) {
+  const paths = Array.isArray(value)
+    ? value.map(entry => stringOf(entry) ?? stringOf(recordOf(entry).path))
+    : Object.values(recordOf(value)).map(
+        entry => stringOf(entry) ?? stringOf(recordOf(entry).from),
+      )
+
+  return paths.flatMap(path => (path ? [path] : []))
+}
+
+async function saveArtifact(
+  $: EngineInterface,
+  artifact: Omit<SessionArtifact, 'publishedAt'>,
+  isBackfill: boolean,
+) {
+  const known = (await read($, artifacts)).find(other => other.url === artifact.url)
+  // A backfill knows the order of publishes but not their times.
+  if (isBackfill && known && known.version >= artifact.version) return
+
+  const publishedAt =
+    isBackfill && known ? known.publishedAt : await $.clock.now()
+  await update($, artifacts, list => [
+    ...list.filter(other => other.url !== artifact.url),
+    { ...artifact, publishedAt },
+  ])
+  await openOnce($)
+}
+
+// What an Artifact call tells: a type's name, a publish, or a delete. Read
+// from the tool's own record of the call, not the text the model read.
+async function noteArtifact($: EngineInterface, call: Call, isBackfill: boolean) {
+  const { input } = call
+  const result = recordOf(call.result)
+  const action = stringOf(input.action) ?? 'publish'
+
+  const match = recordOf(recordOf(result.quickstart).match)
+  await nameType($, match.type_url, match.title)
+  const readType = recordOf(recordOf(result.file_read).type)
+  await nameType($, readType.url, readType.title)
+
+  if (action === 'delete' && typeof input.url === 'string' && input.path === undefined) {
+    const gone = lastPart(input.url)
+    await update($, artifacts, list =>
+      list.filter(other => lastPart(other.url) !== gone && other.id !== gone),
+    )
+
+    return
+  }
+  const url = stringOf(result.url)
+  if (action !== 'publish' || input.asset === true || !url) return
+
+  const known = (await read($, artifacts)).find(other => other.url === url)
+  const resolve = await resolver($)
+  const rootGiven = stringOf(input.root)
+  const root = rootGiven ? await realPath($, resolve(rootGiven)) : known?.root
+  const sent = [
+    stringOf(result.path) ?? stringOf(input.file_path),
+    ...supportingPaths(input.files).map(path => resolve(path, root)),
+  ].flatMap(path => (path ? [resolve(path)] : []))
+  const sources = [
+    ...new Set([
+      ...(known?.sources ?? []),
+      ...(await Promise.all(sent.map(path => realPath($, path)))),
+    ]),
+  ]
+
+  const typeUrl = stringOf(recordOf(result.type).url) ?? known?.typeUrl
+  const typeName = TYPE_NAME.exec(stringOf(result.instructions) ?? '')?.[1]
+  await nameType($, typeUrl, typeName)
+  const seq = typeof result.seq === 'number' ? result.seq : undefined
+  const id = stringOf(result.artifact_id) ?? known?.id
+  const title =
+    stringOf(result.title) ?? known?.title ?? (sources[0] ? basename(sources[0]) : lastPart(url))
+
+  await saveArtifact(
+    $,
+    {
+      url,
+      ...(id === undefined ? {} : { id }),
+      title,
+      kind: typeUrl ? (typeName ? kindOf(typeName) : (known?.kind ?? 'other')) : 'page',
+      ...(typeUrl === undefined ? {} : { typeUrl }),
+      // An answer without a number keeps the version, never goes back.
+      version: Math.max(known?.version ?? 1, seq ?? 1),
+      sources,
+      ...(root === undefined ? {} : { root }),
+    },
+    isBackfill,
+  )
+}
+
+// A doc the Docs connector created, from the link in its answer.
+async function noteDoc($: EngineInterface, call: Call, isBackfill: boolean) {
+  const { container } = call.input as { container?: { create?: { name?: unknown } } }
+  const url = ARTIFACT_LINK.exec(call.text)?.[0]
+  if (!container?.create || !url) return
+
+  const { name } = container.create
+  await saveArtifact(
+    $,
+    {
+      url,
+      title: typeof name === 'string' ? name : 'Untitled doc',
+      kind: 'doc',
+      version: 1,
+      sources: [],
+    },
+    isBackfill,
+  )
+}
+
+async function notePublished($: EngineInterface, call: Call, isBackfill = false) {
+  if (call.tool === 'Artifact') await noteArtifact($, call, isBackfill)
+  else if (DOCS_TOOL.test(call.tool)) await noteDoc($, call, isBackfill)
+}
+
+// What the conversation already holds, for a session the mod joins midway.
+async function backfill($: EngineInterface) {
+  const messages = await $.session.messages({ as: 'api' })
+  const rows = await $.session.messages()
+  if (!Array.isArray(messages) || !Array.isArray(rows)) return
+
+  const userTexts = messages.flatMap(message =>
+    message.role === 'user' ? textsOf(message.content) : [],
+  )
+  const published: Call[] = []
+  const perCall: string[][] = []
+  for (const row of rows) {
+    for (const use of row.toolUses) {
+      if (use.tool === 'Artifact' || DOCS_TOOL.test(use.tool)) {
+        if (!use.isError) {
+          published.push({ tool: use.tool, input: use.input, result: use.result, text: use.text ?? '' })
+        }
+      } else {
+        perCall.push(outputTokens([...stringsIn(use.input), use.text ?? '']))
+      }
+    }
+  }
+  // Each call is searched on its own, as a live one is, and the latest calls
+  // first, so a long session's early paths cannot crowd out its late ones.
+  const tokens = new Set<string>()
+  for (const found of perCall.reverse()) {
+    if (tokens.size >= MAX_BACKFILL_PATHS) break
+    found.forEach(token => tokens.add(token))
+  }
+
+  const { startedAt } = await $.session.usage()
+  const pasted = await findPasted($, userTexts)
+  await addImages(
+    $,
+    pasted.map(path => ({ path, source: 'user' as const })),
+  )
+  await addCreated($, await findCreated($, [...tokens], startedAt))
+  for (const call of published) await notePublished($, call, true)
+}
+
+async function windowsPath($: EngineInterface, path: string) {
+  const { stdout } = await $.process.run(['/usr/bin/wslpath', '-w', path])
+
+  return stdout.trim()
+}
+
+// A file in its default app, or a link in the default browser: through
+// explorer.exe on WSL, the same as a double click, and xdg-open elsewhere.
+async function openRow($: EngineInterface, row: Row) {
+  await update($, selected, () => row.key)
+  try {
+    if (!row.isLink && !(await $.fs.exists(row.target))) {
+      $.ui.toast(`${row.name} no longer exists`)
+
+      return
+    }
+    if (await $.fs.exists(EXPLORER)) {
+      const target = row.isLink ? row.target : await windowsPath($, row.target)
+      // explorer.exe exits 1 even when it opened the file.
+      await $.process.run([EXPLORER, target], { cwd: '/mnt/c', timeoutMs: 15_000 })
+    } else {
+      await $.process.run(['xdg-open', row.target], { timeoutMs: 15_000 })
+    }
+    $.ui.toast(`Opened ${row.name}`)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    $.ui.toast(`Could not open ${row.name}: ${reason}`)
+  }
+}
+
+async function showInFolder($: EngineInterface, row: Row) {
+  const { place } = row
+  try {
+    if (!place || !(await $.fs.exists(place.path))) {
+      $.ui.toast(`${row.name} has no file here`)
+
+      return
+    }
+    if (await $.fs.exists(EXPLORER)) {
+      const path = await windowsPath($, place.path)
+      await $.process.run([EXPLORER, place.isFolder ? path : `/select,${path}`], {
+        cwd: '/mnt/c',
+        timeoutMs: 15_000,
+      })
+    } else {
+      await $.process.run(['xdg-open', place.isFolder ? place.path : dirname(place.path)], {
+        timeoutMs: 15_000,
+      })
+    }
+    $.ui.toast(`Showed ${row.name} in its folder`)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    $.ui.toast(`Could not show ${row.name}: ${reason}`)
+  }
+}
+
+async function copyRow($: EngineInterface, row: Row, surface: RenderSurface) {
+  const copied = await $.ui.copy({ text: row.target, surface })
+  $.ui.toast(
+    copied.isCopied
+      ? `Copied the ${row.isLink ? 'link' : 'path'} of ${row.name}`
+      : `Could not copy: ${copied.reason}`,
+  )
+}
+
+function pastedNumber(image: SessionImage) {
+  return Number(/^(\d+)\./.exec(basename(image.path))?.[1] ?? 0)
+}
+
+// "14:05" for today, "25 Oct" for an earlier day.
+function shortTime(ms: number, now: number) {
+  const date = new Date(ms)
+  if (date.toDateString() !== new Date(now).toDateString()) {
+    return `${date.getDate()} ${MONTHS[date.getMonth()]}`
+  }
+
+  return [date.getHours(), date.getMinutes()]
+    .map(part => String(part).padStart(2, '0'))
+    .join(':')
+}
+
+function shortSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function shortLines(lines: number) {
+  if (lines >= 1000) return `${Math.round(lines / 1000)}k lines`
+
+  return `${lines} line${lines === 1 ? '' : 's'}`
+}
+
+function cellsOf(text: string) {
+  let cells = 0
+  for (const char of text) cells += WIDE.test(char) ? 2 : 1
+
+  return cells
+}
+
+// The text in exactly `width` cells: cut with an ellipsis where it is longer,
+// losing its middle or its end, and padded where it is shorter.
+function fit(text: string, width: number, cutMiddle = false) {
+  if (width <= 0) return ''
+  const pad = (out: string) => out + ' '.repeat(Math.max(0, width - cellsOf(out)))
+  if (cellsOf(text) <= width) return pad(text)
+
+  const chars = [...text]
+  const room = width - 1
+  let head = ''
+  for (const char of chars) {
+    if (cellsOf(head + char) > (cutMiddle ? Math.ceil(room / 2) : room)) break
+    head += char
+  }
+  let tail = ''
+  if (cutMiddle) {
+    for (const char of chars.reverse()) {
+      if (cellsOf(head + char + tail) > room) break
+      tail = char + tail
+    }
+  }
+
+  return pad(`${head}…${tail}`)
+}
+
+// Each path's file name, with its folder's name before it where two share one.
+function namesOf(paths: readonly string[]) {
+  const names = paths.map(basename)
+
+  return paths.map((path, i) =>
+    names.filter(name => name === names[i]).length > 1
+      ? `${basename(dirname(path))}/${names[i]}`
+      : names[i],
+  )
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'session-outputs',
+      description: 'Show the artifacts, files and images of this session in a pane',
+    })
+    await backfill($)
+
+    return next(e)
+  })
+
+  on('command.run', { command: 'session-outputs' }, async $ => {
+    await $.ui.open({ id: PANE, title: TITLE })
+
+    return { text: 'Outputs pane opened.' }
+  })
+
+  on('session.append', async ($, e, next) => {
+    const stored = await next(e)
+    if (e.message.type === 'user') {
+      const texts = textsOf(e.message.content)
+      if (texts.some(text => text.includes('[Image: source: '))) {
+        const pasted = await findPasted($, texts)
+        await addImages(
+          $,
+          pasted.map(path => ({ path, source: 'user' as const })),
+        )
+      }
+    }
+
+    return stored
+  }).catch(($, e, next) => next(e))
+
+  on('tool.call', async ($, e, next) => {
+    // A second's slack for file systems that round modification times.
+    const since = (await $.clock.now()) - 1000
+    const ran = await next(e)
+    if (ran.deny === undefined) {
+      const tool = String(e.tool)
+      const input = e as unknown as Record<string, unknown>
+      if (tool === 'Artifact' || DOCS_TOOL.test(tool)) {
+        // Their calls write nothing of Claude's: a read saves a copy of the
+        // page, which is no document of the session's.
+        if (ran.isError !== true) {
+          await notePublished($, { tool, input, result: ran.result, text: ran.text ?? '' })
+        }
+      } else {
+        const tokens = outputTokens([...stringsIn(e), ran.text ?? ''])
+        await addCreated($, await findCreated($, tokens, since))
+      }
+    }
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // The row the person tabs to is the one c and s act on.
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    const { element } = e
+    if (moved.deny === undefined && element?.startsWith('open:')) {
+      await update($, selected, () => element)
+    }
+
+    return moved
+  }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const imageList = await read($, images)
+    const artifactList = await read($, artifacts)
+    const fileList = await read($, files)
+    const names = await read($, typeNames)
+    const expanded = await read($, showAll)
+    const picked = await read($, selected)
+    const now = await $.clock.now()
+    // One column spare, so a full row never wraps at the frame's edge.
+    const width = Math.max(20, e.props.bodyColumns - 1)
+
+    const artifactRows = [...artifactList]
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .map((artifact): Row => {
+        const kind = (artifact.typeUrl && names[artifact.typeUrl]) || artifact.kind
+        const source = artifact.sources[0]
+
+        return {
+          key: `open:${artifact.url}`,
+          target: artifact.url,
+          isLink: true,
+          name: artifact.title,
+          ...(artifact.root !== undefined
+            ? { place: { path: artifact.root, isFolder: true } }
+            : source !== undefined
+              ? { place: { path: source, isFolder: false } }
+              : {}),
+          kind,
+          ...(KIND_COLORS[kind] ? { kindColor: KIND_COLORS[kind] } : {}),
+          time: shortTime(artifact.publishedAt, now),
+          detail: `v${artifact.version}`,
+        }
+      })
+
+    // An Artifact's own files are its row, not rows of their own.
+    const isSource = (path: string) =>
+      artifactList.some(
+        artifact =>
+          artifact.sources.includes(path) ||
+          (artifact.root !== undefined && path.startsWith(`${artifact.root}/`)),
+      )
+    const shownFiles = fileList
+      .filter(file => !isSource(file.path))
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
+    const fileNames = namesOf(shownFiles.map(file => file.path))
+    const fileRows = shownFiles.map(
+      (file, i): Row => ({
+        key: `open:${file.path}`,
+        target: file.path,
+        isLink: false,
+        name: fileNames[i] ?? basename(file.path),
+        place: { path: file.path, isFolder: false },
+        kind: extension(file.path),
+        time: shortTime(file.modifiedAt, now),
+        detail: file.lines === undefined ? shortSize(file.size) : shortLines(file.lines),
+      }),
+    )
+
+    const pasted = imageList
+      .filter(image => image.source === 'user')
+      .sort((a, b) => pastedNumber(b) - pastedNumber(a) || b.modifiedAt - a.modifiedAt)
+    const created = imageList
+      .filter(image => image.source === 'claude')
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
+    const createdNames = namesOf(created.map(image => image.path))
+    const labelOf = (image: SessionImage) => {
+      if (image.source === 'claude') {
+        return createdNames[created.indexOf(image)] ?? basename(image.path)
+      }
+      const number = pastedNumber(image)
+
+      return number ? `Image #${number}` : basename(image.path)
+    }
+    const imageRows = [...pasted, ...created]
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
+      .map(
+        (image): Row => ({
+          key: `open:${image.path}`,
+          target: image.path,
+          isLink: false,
+          name: labelOf(image),
+          place: { path: image.path, isFolder: false },
+          glyph:
+            image.source === 'user'
+              ? { text: '■', color: YOURS }
+              : { text: '◆', color: 'claude' },
+          kind: '',
+          time: shortTime(image.modifiedAt, now),
+          detail: image.width && image.height ? `${image.width}×${image.height}` : '',
+        }),
+      )
+
+    if (artifactRows.length + fileRows.length + imageRows.length === 0) {
+      return (
+        <Box flexDirection="column">
+          <Text bold>Nothing yet</Text>
+          <Text dimColor>
+            Images you paste, and the artifacts, documents and images Claude makes,
+            show up here.
+          </Text>
+        </Box>
+      )
+    }
+
+    const shownOf = (key: Group, items: readonly Row[]) =>
+      expanded[key] ? items : items.slice(0, LIMIT)
+    // c and s act on a row the person can see: the one picked, while its
+    // group shows it, else the first.
+    const visible = [
+      ...shownOf('artifacts', artifactRows),
+      ...shownOf('files', fileRows),
+      ...shownOf('images', imageRows),
+    ]
+    const current = visible.find(row => row.key === picked) ?? visible[0]
+
+    // Every row is the pane's width: its name takes what the columns leave, and
+    // a narrow pane drops columns from the right before a name gets too short.
+    const room = width - 2
+    let kept = COLUMNS.length
+    const columnsWidth = () => COLUMNS.slice(0, kept).reduce((sum, column) => sum + column, 0)
+    while (kept > 0 && room - columnsWidth() < MIN_NAME) kept -= 1
+    const nameRoom = room - columnsWidth()
+
+    const row = (item: Row) => {
+      const isCurrent = item.key === current?.key
+      const paint = isCurrent ? { backgroundColor: SELECTED } : {}
+      const glyph = item.glyph ? `${item.glyph.text} ` : ''
+      // A space always parts the name, and each cell but the last, from what
+      // follows it.
+      const name = fit(item.name, nameRoom - glyph.length - 1, true) + ' '
+      const detail = isCurrent && item.isLink ? `${item.detail} ↗` : item.detail
+      const cells = [item.kind, item.time, detail].slice(0, kept).map((cell, i) => {
+        const column = COLUMNS[i] ?? 0
+
+        return i === COLUMNS.length - 1 ? fit(cell, column) : `${fit(cell, column - 1)} `
+      })
+      const colorOf = (i: number) =>
+        i === 0 ? item.kindColor : i === 2 && isCurrent && item.isLink ? 'claude' : undefined
+
+      // The keyed Box is what the pointer hovers, lighting the whole row.
+      return (
+        <Box key={`row:${item.key}`}>
+          <Button key={item.key} plain hover={{ inverse: true }} onPress={() => openRow($, item)}>
+            {[
+              <Text key="mark" color="claude" {...paint}>
+                {isCurrent ? '▌ ' : '  '}
+              </Text>,
+              ...(item.glyph
+                ? [
+                    <Text key="glyph" color={item.glyph.color} {...paint}>
+                      {glyph}
+                    </Text>,
+                  ]
+                : []),
+              <Text key="name" {...paint}>
+                {name}
+              </Text>,
+              ...cells.map((cell, i) => {
+                const color = colorOf(i)
+
+                return (
+                  <Text
+                    key={`cell:${i}`}
+                    {...(color === undefined ? { dimColor: true } : { color })}
+                    {...paint}
+                  >
+                    {cell}
+                  </Text>
+                )
+              }),
+            ]}
+          </Button>
+        </Box>
+      )
+    }
+
+    const group = (key: Group, title: string, count: string, items: readonly Row[]) => {
+      if (items.length === 0) return undefined
+      const isOpen = expanded[key]
+      const rule = '─'.repeat(Math.max(1, width - title.length - count.length - 2))
+
+      return (
+        <Box key={`group:${key}`} flexDirection="column">
+          <Box flexDirection="row">
+            <Text bold>{title}</Text>
+            <Text dimColor>{` ${rule} ${count}`}</Text>
+          </Box>
+          {shownOf(key, items).map(row)}
+          {items.length > LIMIT && (
+            <Box key={`more-row:${key}`}>
+              <Button
+                key={`more:${key}`}
+                plain
+                hover={{ underline: true }}
+                onPress={() =>
+                  update($, showAll, state => ({ ...state, [key]: !state[key] }))
+                }
+              >
+                <Text dimColor>
+                  {isOpen ? '  Show fewer' : `  Show ${items.length - LIMIT} more`}
+                </Text>
+              </Button>
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    const imageCount = [
+      pasted.length > 0 ? `${pasted.length} you` : '',
+      created.length > 0 ? `${created.length} Claude` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        {group('artifacts', 'Artifacts', String(artifactRows.length), artifactRows)}
+        {group('files', 'Files', String(fileRows.length), fileRows)}
+        {group('images', 'Images', imageCount, imageRows)}
+        <Box flexDirection="column">
+          <Text dimColor>{'─'.repeat(width)}</Text>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+            <Box flexDirection="row">
+              <Text bold>enter</Text>
+              <Text dimColor> open</Text>
+            </Box>
+            <Button
+              key="copy"
+              plain
+              hotkey="c"
+              label="copy link or path"
+              onPress={press => current && copyRow($, current, press.surface)}
+            />
+            <Button
+              key="reveal"
+              plain
+              hotkey="s"
+              label="show in folder"
+              onPress={() => current && showInFolder($, current)}
+            />
+          </Box>
+        </Box>
+      </Box>
+    )
+  })
+}
