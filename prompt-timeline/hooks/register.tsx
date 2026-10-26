@@ -1,5 +1,14 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren, Timer, UiPressArgument } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  RenderChildren,
+  RenderInput,
+  RenderSurface,
+  TextProps,
+  Timer,
+  UiPressArgument,
+} from 'claude-code'
 
 import type { Outcome, SearchHit, SearchResults, TimelineEntry, TreeLine, TreeNode } from '../types'
 
@@ -82,19 +91,23 @@ const TITLE_COLUMNS = 10
 const PROMPT_CHARS = 400
 const REPLY_CHARS = 800
 // Reads the transcript's whole tree, the branches a rewind left included: a
-// record naming the prompt the conversation stands at (`H owner`), then one
-// per prompt the person typed (`T uuid parent timestamp end cmds files tool git
-// text reply`). Each row belongs to the nearest prompt above it, so `parent` is
-// the prompt whose turn this one was asked after, `end` the last row of the
-// prompt's own turn, and `reply` the opening of that turn's last text. `cmds`
-// counts the turn's shell commands, `files` the files it changed, `tool` names
-// another tool it used, and `git` is 2 where a command pushed, 1 where one
-// committed. The conversation stands where the newest row is, or at the leaf a
-// `last-prompt` record after it names (a rewind writes one). A compacted row's
-// parent is the row it summed up; a subagent's rows are left out. A prompt
-// Claude Code numbers 1 starts the conversation over, after a rewind to the
-// top, so it has no parent, whatever row it names: Claude Code can name the
-// last row of the conversation it left.
+// record naming the prompt the conversation stands at (`H owner`), one naming
+// the chat as its title last read (`N title`, a JSON string's opening), then
+// one per prompt the person typed (`T uuid parent timestamp end cmds files
+// tool git text reply tokens`). Each row belongs to the nearest prompt above
+// it, so `parent` is the prompt whose turn this one was asked after, `end` the
+// last row of the prompt's own turn, `reply` the opening of that turn's last
+// text, and `tokens` the input tokens its first response's usage counts, the
+// context it was answered over. `cmds` counts the turn's shell commands,
+// `files` the files it changed, `tool` names another tool it used (not the
+// desktop app's own `mcp__ccd_` tools, which close every turn there), and
+// `git` is 2 where a command pushed, 1 where one committed. The conversation
+// stands where the newest row is, or at the leaf a `last-prompt` record after
+// it names (a rewind writes one). A compacted row's parent is the row it
+// summed up; a subagent's rows are left out. A prompt Claude Code numbers 1
+// starts the conversation over, after a rewind to the top, so it has no
+// parent, whatever row it names: Claude Code can name the last row of the
+// conversation it left.
 const TREE_SCAN = `
 function field(key,   start, rest) {
   if (!(start = index($0, key))) return ""
@@ -105,6 +118,10 @@ function after(text, key,   start, rest) {
   if (!(start = index(text, key))) return ""
   rest = substr(text, start + length(key))
   return substr(rest, 1, index(rest, "\\"") - 1)
+}
+function tokens(key) {
+  if (!match($0, "\\"" key "\\":[0-9]+")) return 0
+  return substr($0, RSTART + length(key) + 3, RLENGTH - length(key) - 3) + 0
 }
 function opening(key, size,   start, text) {
   if (!(start = index($0, key))) return ""
@@ -131,6 +148,8 @@ index($0, "{\\"parentUuid\\":") == 1 {
   if (index($0, "\\"type\\":\\"assistant\\",\\"uuid\\":\\"")) {
     text = opening("\\"type\\":\\"text\\",\\"text\\":\\"", ${REPLY_CHARS})
     if (text != "") said[id] = text
+    spent = tokens("input_tokens") + tokens("cache_creation_input_tokens") + tokens("cache_read_input_tokens")
+    if (spent > 0) asked[id] = spent
     if (start = index($0, "\\"type\\":\\"tool_use\\"")) {
       call = substr($0, start)
       used[id] = after(call, "\\"name\\":\\"")
@@ -162,12 +181,15 @@ index($0, "{\\"parentUuid\\":") == 1 {
 index($0, "{\\"type\\":\\"last-prompt\\"") == 1 {
   leaf = field("\\"leafUuid\\":\\""); leafLine = NR
 }
+index($0, "{\\"type\\":\\"custom-title\\"") == 1 { named = field("\\"customTitle\\":\\"") }
+index($0, "{\\"type\\":\\"ai-title\\"") == 1 { titled = field("\\"aiTitle\\":\\"") }
 END {
   for (i = 1; i <= count; i++) {
     found = owner(rows[i])
     if (found == "") continue
     end[found] = rows[i]
     if (rows[i] in said) reply[found] = said[rows[i]]
+    if ((rows[i] in asked) && !(found in context)) context[found] = asked[rows[i]]
     if (!(rows[i] in used)) continue
     name = used[rows[i]]
     if (git[rows[i]] > made[found]) made[found] = git[rows[i]]
@@ -176,12 +198,13 @@ END {
       if (!((found, touched[rows[i]]) in seen)) files[found]++
       seen[found, touched[rows[i]]] = 1
     }
-    else if (name !~ /^(Read|Grep|Glob|LS|TodoWrite|ToolSearch|Skill)$/) tool[found] = name
+    else if (name !~ /^(Read|Grep|Glob|LS|TodoWrite|ToolSearch|Skill)$/ && name !~ /^mcp__ccd_/) tool[found] = name
   }
   print "H\\t" owner((leafLine > lastLine && (leaf in up)) ? leaf : last)
+  print "N\\t" (named != "" ? named : titled)
   for (i = (n > ${MAX_ENTRIES}) ? n - ${MAX_ENTRIES} + 1 : 1; i <= n; i++) {
     id = prompt[i]
-    print "T\\t" id "\\t" owner(up[id]) "\\t" at[i] "\\t" end[id] "\\t" (cmds[id] + 0) "\\t" (files[id] + 0) "\\t" tool[id] "\\t" (made[id] + 0) "\\t" body[i] "\\t" reply[id]
+    print "T\\t" id "\\t" owner(up[id]) "\\t" at[i] "\\t" end[id] "\\t" (cmds[id] + 0) "\\t" (files[id] + 0) "\\t" tool[id] "\\t" (made[id] + 0) "\\t" body[i] "\\t" reply[id] "\\t" (context[id] + 0)
   }
 }`
 // The most of a turn's last reply its card shows.
@@ -193,6 +216,9 @@ const CONTINUE = ' ↪ continue here '
 // What a card's copy button's key opens with, before the prompt's id: it
 // copies the `/resume-at` command that opens the session at that turn.
 const COPY = 'copy:'
+// What a fork's card's button that opens its chat opens with, where the
+// person picks chats.
+const CHAT = 'chat:'
 // Copies every message of a transcript, every branch, to `dst` under another
 // session's id: `from` and `to` are the two `"sessionId":"…"` pairs. Rows that
 // are not messages (titles, costs, checkpoints) stay with the original. Each
@@ -227,6 +253,29 @@ const REPLY_LINES = 4
 // Behind the row the conversation stands at, and an opened card: the theme's
 // own shade behind the person's messages.
 const HIGHLIGHT = 'userMessageBackground'
+
+// Where a surface draws the tree's lines as pictures (the desktop app, VS
+// Code, the phone): each lane's width and each row's height in CSS pixels.
+// Every row's picture is as tall as the row, so the lines run on unbroken.
+const LANE_PX = 14
+const ROW_PX = 28
+// The most the lanes take across, however deep the branches nest.
+const LANES_PX = 112
+// About how many CSS pixels such a surface gives each column it counts in
+// `bodyColumns`, and how many more letters of a prompt's proportional text fit
+// in a column's room than monospaced ones.
+const COLUMN_PX = 8
+const PROSE = 1.25
+// The lines' colours there: a picture cannot name a theme key. The accent,
+// then one for each of TONES, mid tones that read on a light page and a dark.
+const ACCENT_HEX = '#d97757'
+const TONES_HEX = ['#8b5cf6', '#14b8a6', '#ec4899', '#0ea5e9', '#10b981', '#f59e0b']
+// Pads a number to the width of the longest: a space as wide as a digit.
+const FIGURE = '\u2007'
+// What a turn did, in a picture surface's caption type: a tool's whole name.
+const TOLD_COLUMNS = OUTCOME_COLUMNS + 3
+// The most of a prompt the list opens under its row there.
+const WHOLE = 600
 
 // What the search field's key opens with: the one element the focus ring may
 // rest on.
@@ -275,14 +324,38 @@ const corpus = new Map<string, string>()
 let settling: Timer | undefined
 let searches = 0
 // Each prompt of the tree as the scan read it, by id: the turn's last row and
-// last reply stay here, out of `$.state`, for the cards and the switch. A
+// last reply stay here, out of `$.state`, for the cards and the switch, beside
+// the tokens its first response was answered over. A turn only a fork holds
+// names that fork's session, its transcript and the title of its chat. A
 // reload loses it and the scan at load reads it again.
-type Turn = { id: string; parent: string; at: number; end: string; text: string; reply: string; outcome: Outcome }
+type Turn = {
+  id: string
+  parent: string
+  at: number
+  end: string
+  text: string
+  reply: string
+  outcome: Outcome
+  tokens: number
+  session?: string
+  path?: string
+  chat?: string
+}
 let turns = new Map<string, Turn>()
-// The transcript's size when the tree was last read: a scan that would read
-// the same bytes is skipped. And a count of scans asked, so one that finishes
-// after a newer one was asked writes nothing.
-let grownAt = -1
+// A transcript's tree as the scan last read it, by path, at the size it had
+// then: where it stands, its turns, and the title of its chat.
+type Scan = { size: number; here: string; turns: Turn[]; title: string }
+let scans = new Map<string, Scan>()
+// Whether each other transcript of the project, by path, holds a first prompt
+// of this session's (`roots`): a fork of the conversation, as the desktop app
+// makes one, or a copy /resume-at made. One that does not never will.
+let kin = new Map<string, boolean>()
+let roots = ''
+// The transcript's size and its forks' when the tree was last read, and the
+// other transcripts beside it then: a scan that would read the same bytes is
+// skipped. And a count of scans asked, so one that finishes after a newer one
+// was asked writes nothing.
+let grownAt = ''
 let grows = 0
 // How many times the session was resumed: a switch reads it to tell whether
 // its `/resume` took.
@@ -594,7 +667,14 @@ async function open($: EngineInterface) {
   return $.ui.open({ id: PANE, title: TITLE, columns: COLUMNS })
 }
 
-async function jump($: EngineInterface, id: string) {
+async function jump($: EngineInterface, id: string, surface: RenderSurface) {
+  // A graphical surface's transcript is the app's own, which nothing here can
+  // scroll: there a press opens the prompt whole under its row, or closes it.
+  if (surface !== 'terminal') {
+    await update($, picked, shown => (shown === id ? '' : id))
+
+    return
+  }
   // Scroll first: a transcript row moves only while answering the press.
   const moved = await $.ui
     .scroll({ to: { requestId: id }, block: 'start' })
@@ -618,6 +698,56 @@ function outcomeOf(cmds: number, files: number, tool: string, git: number, reply
 // A line's colour, by its tone.
 function toneColor(tone: number): string {
   return tone === PATH ? ACCENT : TONES[tone % TONES.length]!
+}
+
+// The same, where it is drawn in a picture.
+function toneHex(tone: number): string {
+  return tone === PATH ? ACCENT_HEX : TONES_HEX[tone % TONES_HEX.length]!
+}
+
+// One row of the tree's lanes as a picture, `lanes` of `lane` pixels across.
+// The lines beside the prompt run through the row, as the terminal's `│` do.
+// Its own line comes down to its dot from the row above, or curves in from the
+// lane it forks off, from partway down where the fork opens the tree (`┬`);
+// and it goes on below where the next row carries it on, in that row's tone.
+// The dot is hollow on a branch the conversation left: no line runs into it.
+function lanesSvg(node: TreeNode, before: TreeNode | undefined, after: TreeNode | undefined, lanes: number, lane: number) {
+  const x = (at: number) => lane / 2 + at * lane
+  const mid = ROW_PX / 2
+  const at = node.cells.length - 1
+  const radius = node.place === 'here' ? 5 : 4
+  const stroke = (tone: number) => `stroke="${toneHex(tone)}" stroke-width="2" fill="none"`
+  const isFork = node.above.some(cell => cell.text === '─╮')
+  const from = node.above.some(cell => cell.text === '┬') ? mid / 2 : 0
+  const marks = node.cells
+    .slice(0, -1)
+    .map((cell, index) => `<path d="M${x(index)} ${isFork && index === at - 1 ? from : 0}V${ROW_PX}" ${stroke(cell.tone)}/>`)
+  if (isFork) {
+    marks.push(`<path d="M${x(at - 1)} ${from}C${x(at - 1)} ${mid} ${x(at)} ${from} ${x(at)} ${mid - radius}" ${stroke(node.tone)}/>`)
+  } else if (before !== undefined && before.cells.length > at) {
+    marks.push(`<path d="M${x(at)} 0V${mid - radius}" ${stroke(node.tone)}/>`)
+  }
+  const below = after?.cells[at]
+  const isNewBranch = after !== undefined && after.cells.length - 1 === at && after.above.some(cell => cell.text === '─╮')
+  if (below !== undefined && !isNewBranch) marks.push(`<path d="M${x(at)} ${mid + radius}V${ROW_PX}" ${stroke(below.tone)}/>`)
+  const color = toneHex(node.tone)
+  if (node.place === 'here') {
+    marks.push(`<circle cx="${x(at)}" cy="${mid}" r="${radius + 2.5}" fill="${color}" fill-opacity="0.25"/>`)
+  }
+  marks.push(
+    node.place === 'off'
+      ? `<circle cx="${x(at)}" cy="${mid}" r="${radius - 1}" ${stroke(node.tone)}/>`
+      : `<circle cx="${x(at)}" cy="${mid}" r="${radius}" fill="${color}"/>`,
+  )
+  const width = lanes * lane
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_PX}" viewBox="0 0 ${width} ${ROW_PX}">${marks.join('')}</svg>`
+}
+
+// An empty picture as wide as the lanes: what an opened card is set in by, so
+// it lines up with the prompts.
+function blankSvg(width: number) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1" viewBox="0 0 ${width} 1"/>`
 }
 
 // When a prompt was sent: its time today, its date before.
@@ -658,7 +788,7 @@ function wrap(text: string, room: number, most: number): string[] {
 // accent, so a switch moves nothing; a new branch takes its lane. A rewind to
 // the top leaves more than one first prompt: they split the same way, from a
 // fork above the first row (`┬─╮`).
-function layout(list: Turn[], here: string): TreeNode[] {
+function layout(list: Turn[], here: string, window = 0): TreeNode[] {
   const byId = new Map(list.map(turn => [turn.id, turn]))
   const roots: Turn[] = []
   const children = new Map<string, Turn[]>()
@@ -718,6 +848,8 @@ function layout(list: Turn[], here: string): TreeNode[] {
         tone,
         place,
         outcome: turn.outcome,
+        ...(turn.chat === undefined ? {} : { chat: turn.chat }),
+        ...(window > 0 && turn.tokens > 0 ? { context: percentOf(turn.tokens, window) } : {}),
       }
       nodes.push(node)
       own.push(node)
@@ -746,24 +878,19 @@ function layout(list: Turn[], here: string): TreeNode[] {
   return nodes
 }
 
-// Reads the transcript's tree again, unless it has not grown since it was
-// last read.
-async function grow($: EngineInterface, isForced = false): Promise<void> {
-  const path = await transcriptPath($)
-  if (path === undefined) return
-  const { size } = await $.fs.stat(path)
-  if (!isForced && size === grownAt) return
-
-  const ask = ++grows
+// Reads one transcript's tree (TREE_SCAN), at the size it has now.
+async function scanTree($: EngineInterface, path: string, size: number): Promise<Scan | undefined> {
   const scan = await $.process.run(['awk', TREE_SCAN, path])
-  if (scan.exitCode !== 0 || ask !== grows) return
+  if (scan.exitCode !== 0) return undefined
 
   let here = ''
+  let title = ''
   const list: Turn[] = []
   for (const record of scan.stdout.split('\n')) {
-    const [kind, id = '', parent = '', timestamp = '', end = '', cmds = '', files = '', tool = '', git = '', text = '', reply = ''] =
+    const [kind, id = '', parent = '', timestamp = '', end = '', cmds = '', files = '', tool = '', git = '', text = '', reply = '', spent = ''] =
       record.split('\t')
     if (kind === 'H') here = id
+    if (kind === 'N' && id !== '') title = decode(`${id}"`)
     if (kind !== 'T' || id === '') continue
     // A turn with no text has no reply to decode, not one cut short.
     const said = reply === '' ? '' : cut(flatten(decode(reply)), REPLY)
@@ -776,11 +903,110 @@ async function grow($: EngineInterface, isForced = false): Promise<void> {
       text: preview(decode(text)).replace(/\[Image #\d+\]/g, '▣'),
       reply: said,
       outcome: outcomeOf(Number(cmds) || 0, Number(files) || 0, tool, Number(git) || 0, said),
+      tokens: Number(spent) || 0,
     })
   }
-  grownAt = size
+
+  return { size, here, turns: list, title }
+}
+
+// A transcript's tree, read again only where it has grown since.
+async function scanned($: EngineInterface, path: string, size: number): Promise<Scan | undefined> {
+  const known = scans.get(path)
+  if (known?.size === size) return known
+  const scan = await scanTree($, path, size)
+  if (scan !== undefined) scans.set(path, scan)
+
+  return scan
+}
+
+// The forks of the conversation among the other transcripts of its project:
+// those holding one of its first prompts, as the desktop app's fork, a copy
+// /resume-at made, or the session this one was forked from all do. Each is
+// looked for once, by a grep that stops at a file's first match.
+async function forksOf(
+  $: EngineInterface,
+  own: Scan,
+  others: { path: string; size: number }[],
+): Promise<{ sessionId: string; path: string; scan: Scan }[]> {
+  const firsts = own.turns.filter(turn => turn.parent === '').map(turn => turn.id)
+  // A rewind to the top adds a first prompt: a fork made since holds that one.
+  if (firsts.join(',') !== roots) {
+    kin = new Map()
+    roots = firsts.join(',')
+  }
+  if (firsts.length === 0) return []
+
+  const unknown = others.filter(other => !kin.has(other.path))
+  if (unknown.length > 0) {
+    const found = await $.process.run([
+      'grep',
+      '-l',
+      '-F',
+      ...firsts.flatMap(id => ['-e', `"uuid":"${id}"`]),
+      '--',
+      ...unknown.map(other => other.path),
+    ])
+    // grep exits 1 where no file held one, 2 where one could not be read.
+    const held = new Set(found.stdout.split('\n'))
+    for (const other of unknown) kin.set(other.path, held.has(other.path))
+  }
+
+  const forks: { sessionId: string; path: string; scan: Scan }[] = []
+  for (const other of others) {
+    if (kin.get(other.path) !== true) continue
+    const scan = await scanned($, other.path, other.size).catch(() => undefined)
+    const sessionId = other.path.slice(other.path.lastIndexOf('/') + 1, -'.jsonl'.length)
+    if (scan !== undefined) forks.push({ sessionId, path: other.path, scan })
+  }
+
+  return forks
+}
+
+// Reads the transcript's tree again, and its forks', unless none of them has
+// grown since it was last read and no transcript has joined them.
+async function grow($: EngineInterface, isForced = false): Promise<void> {
+  const path = await transcriptPath($)
+  if (path === undefined) return
+  const { size } = await $.fs.stat(path)
+  const folder = path.slice(0, path.lastIndexOf('/'))
+  const others = (await $.fs.list(folder).catch(() => []))
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.jsonl') && `${folder}/${entry.name}` !== path)
+    .map(entry => ({ path: `${folder}/${entry.name}`, size: entry.size }))
+  // Another session of the project that is no fork changes nothing here,
+  // however it grows.
+  const seen = [
+    size,
+    ...others.map(other => (kin.get(other.path) === false ? other.path : `${other.path}:${other.size}`)),
+  ].join('\n')
+  if (!isForced && seen === grownAt) return
+
+  const ask = ++grows
+  const own = await scanned($, path, size)
+  if (own === undefined || ask !== grows) return
+  const forks = await forksOf($, own, others).catch(() => [])
+  if (ask !== grows) return
+
+  // A fork holds the turns before it as the session does: each joins the
+  // tree once, the session's own first, and a fork's own turns are its
+  // branches, under the turn the fork was made at.
+  const list = [...own.turns]
+  const listed = new Set(list.map(turn => turn.id))
+  for (const { sessionId, path: holder, scan } of forks) {
+    for (const turn of scan.turns) {
+      if (listed.has(turn.id)) continue
+      listed.add(turn.id)
+      list.push({ ...turn, session: sessionId, path: holder, chat: scan.title || sessionId.slice(0, 8) })
+    }
+  }
+  // Among the turns asked at one point, the newest carries on down the lane.
+  if (list.length > own.turns.length) list.sort((one, other) => one.at - other.at)
+  // A fork's turns take their context from its transcript, as a share of
+  // this session's window.
+  const { window } = (await $.session.usage().catch(() => undefined))?.context ?? { window: 0 }
+  grownAt = seen
   turns = new Map(list.map(turn => [turn.id, turn]))
-  await update($, tree, () => layout(list, here))
+  await update($, tree, () => layout(list, own.here, window))
 }
 
 async function regrow($: EngineInterface) {
@@ -799,25 +1025,30 @@ async function toggleTree($: EngineInterface) {
 }
 
 // A press opens the prompt's card, or closes it. A prompt the conversation
-// passes through is in the transcript too: the press scrolls to it.
-async function pick($: EngineInterface, id: string) {
+// passes through is in the terminal's transcript too: the press scrolls to it.
+async function pick($: EngineInterface, id: string, surface: RenderSurface) {
   const node = (await read($, tree)).find(one => one.id === id)
-  if (node?.place !== 'off') await jump($, id)
+  if (node?.place !== 'off' && surface === 'terminal') await jump($, id, surface)
   await update($, opened, shown => (shown === id ? '' : id))
 }
 
-// Copies the command that opens this session at the end of the prompt's turn
-// from another terminal, the message named by its first eight characters as
-// the status line names it.
-async function copyResume($: EngineInterface, id: string) {
-  const end = turns.get(id)?.end
-  if (!end) {
+// The command that opens a session at the end of the prompt's turn from
+// another terminal, the message named by its first eight characters as the
+// status line names it; a fork's turn, in that fork's session.
+function resumeCommand(turn: Turn | undefined, sessionId: string): string | undefined {
+  if (!turn?.end) return undefined
+
+  return `/resume-at ${turn.session ?? sessionId}:${turn.end.slice(0, 8)}`
+}
+
+async function copyResume($: EngineInterface, id: string, surface: RenderSurface) {
+  const command = resumeCommand(turns.get(id), await $.session.id())
+  if (command === undefined) {
     $.ui.toast("Couldn't find that turn in the transcript.")
 
     return
   }
-  const command = `/resume-at ${await $.session.id()}:${end.slice(0, 8)}`
-  const { isCopied } = await $.ui.copy({ text: command }).catch(() => ({ isCopied: false }))
+  const { isCopied } = await $.ui.copy({ text: command, surface }).catch(() => ({ isCopied: false }))
   $.ui.toast(isCopied ? `Copied ${command}` : `Couldn't copy it: ${command}`)
 }
 
@@ -831,14 +1062,19 @@ async function pointAt(
   leaf: string,
   lastPrompt: string,
 ): Promise<string | undefined> {
-  const record = JSON.stringify({
+  return appendRecord($, path, {
     type: 'last-prompt',
     ...(lastPrompt === '' ? {} : { lastPrompt }),
     leafUuid: leaf,
     explicit: true,
     sessionId,
   })
-  const wrote = await $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', record, path])
+}
+
+// Appends one record to a transcript, as Claude Code writes its own. Resolves
+// why not, if it could not.
+async function appendRecord($: EngineInterface, path: string, record: object): Promise<string | undefined> {
+  const wrote = await $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', JSON.stringify(record), path])
 
   return wrote.exitCode === 0 ? undefined : `Couldn't write to the transcript: ${wrote.stderr.trim()}`
 }
@@ -913,6 +1149,14 @@ async function switchTo($: EngineInterface, id: string) {
   }
 
   await update($, opened, () => '')
+  // A fork's own turn goes on in the fork, opened as /resume-at opens it: a
+  // copy of it where another window has it open.
+  if (turn.session !== undefined) {
+    const { text } = await resumeAt($, `${turn.session}:${turn.end}`)
+    if (text !== undefined) $.ui.toast(text)
+
+    return
+  }
   const depth = (await read($, tree)).find(one => one.id === id)?.depth
   const sessionId = await $.session.id()
   const isInCopy = await isOutOfReach($, path, turn.end).catch(() => false)
@@ -944,6 +1188,74 @@ async function switchTo($: EngineInterface, id: string) {
   $.ui.toast(
     `${said ? `${said} ` : ''}Branch saved: quit, then run ${command}${isCopied ? ' (copied)' : ''}.`,
   )
+}
+
+// Hands a URL to whatever the machine opens it with, from wherever the session
+// runs: Windows, by way of WSL or not, macOS, or a Linux desktop. Resolves
+// whether it was handed on: what opens it says nothing back.
+async function openUrl($: EngineInterface, url: string): Promise<boolean> {
+  const explorer = '/mnt/c/Windows/explorer.exe'
+  const isWsl = await $.fs.exists(explorer).catch(() => false)
+  const isWindows = (await $.env.get('OS')) === 'Windows_NT'
+  const isMac = !isWsl && !isWindows && (await $.process.run(['uname']).catch(() => undefined))?.stdout.trim() === 'Darwin'
+  const argv = isWsl ? [explorer, url] : isWindows ? ['explorer.exe', url] : isMac ? ['open', url] : ['xdg-open', url]
+  const opened = await $.process.run(argv).catch(() => undefined)
+
+  // explorer.exe exits 1 having handed the URL on.
+  return opened !== undefined && (opened.exitCode === 0 || (opened.exitCode === 1 && argv[0]!.endsWith('explorer.exe')))
+}
+
+// The desktop app's link that opens a Claude Code session as one of its chats:
+// one it holds already, or a transcript it takes in as a new one.
+function chatLink(sessionId: string): string {
+  return `claude://resume?session=${sessionId}`
+}
+
+// Where the person picks chats (the desktop app), a branch goes on in a chat
+// of its own, as the app's own Fork makes one: a copy of the chat that holds
+// the turn, every branch, pointed at the end of the turn and named for it,
+// which the app is asked to open. The chat itself is left as it is.
+async function continueInApp($: EngineInterface, id: string) {
+  const turn = turns.get(id)
+  const path = turn?.path ?? (await transcriptPath($))
+  if (turn === undefined || turn.end === '' || path === undefined) {
+    $.ui.toast("Couldn't find that branch in the transcript.")
+
+    return
+  }
+
+  await update($, opened, () => '')
+  const depth = (await read($, tree)).find(one => one.id === id)?.depth ?? '?'
+  const copy = await copySession($, path, turn.session ?? (await $.session.id()))
+  if (typeof copy === 'string') {
+    $.ui.toast(copy)
+
+    return
+  }
+  const unwritten = await pointAt($, copy.path, copy.sessionId, turn.end, turn.text)
+  if (unwritten !== undefined) {
+    $.ui.toast(unwritten)
+
+    return
+  }
+  const title = `${turn.chat ?? (scans.get(path)?.title || 'Branch')} (turn ${depth})`
+  await appendRecord($, copy.path, { type: 'custom-title', customTitle: title, sessionId: copy.sessionId })
+  const isOpened = await openUrl($, chatLink(copy.sessionId))
+  $.ui.toast(
+    isOpened
+      ? `Opening “${title}”, a new chat that goes on from turn ${depth}.`
+      : `Couldn't ask the app to open it: /resume-at ${copy.sessionId}:${turn.end.slice(0, 8)} opens it in a terminal.`,
+  )
+}
+
+// Opens the chat a fork's turn is in, as it stands, where the person picks
+// chats (the desktop app).
+async function openChat($: EngineInterface, id: string) {
+  const turn = turns.get(id)
+  if (turn?.session === undefined) return
+
+  const isOpened = await openUrl($, chatLink(turn.session))
+  $.ui.toast(isOpened ? `Opening “${turn.chat}”.` : `Couldn't ask the app to open “${turn.chat}”.`)
 }
 
 // The transcripts, in any project, of the sessions whose id starts with
@@ -1086,6 +1398,396 @@ async function openPointed(
   }
 }
 
+// What a pane draws from, as one draw read it.
+type Drawn = {
+  list: TimelineEntry[]
+  current: string
+  isContextShown: boolean
+  fieldKey: string
+  isSearchShown: boolean
+  isFiltered: boolean
+  results: SearchResults
+  isTreeShown: boolean
+  nodes: TreeNode[]
+  openedId: string
+  now: number
+  width: number
+  count: string
+  sessionId: string
+}
+
+// The pane where a surface draws more than a terminal's cells (the desktop
+// app, VS Code, the phone): the same views, in its native buttons, its type
+// sizes and proportional text, with the tree's lanes drawn as pictures, so a
+// branch curves off its line and the lines run on unbroken. Its transcript is
+// the app's own, which nothing here can scroll: a press on a prompt opens it
+// in place instead, the tree's with its turn's last reply.
+function drawApp($: EngineInterface, e: RenderInput<'Pane', 'desktop' | 'vscode' | 'mobile'>, drawn: Drawn) {
+  const elements = $.ui.resolve(e)
+  const { Box, Text, Button, Svg } = elements
+  const Input = 'Input' in elements ? elements.Input : undefined
+  const { list, current, isContextShown, fieldKey, isSearchShown, isFiltered, results, isTreeShown, nodes, openedId, now, width, count, sessionId } =
+    drawn
+
+  // The pane's own frame names it: the header is the views, the toggles, and
+  // what the view holds.
+  const header = (
+    <Box flexDirection="column" gap="xs" marginBottom="sm">
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Box flexDirection="row" gap="xs">
+          <Button
+            key="tree-toggle"
+            variant={isTreeShown ? 'primary' : 'secondary'}
+            onPress={() => (isTreeShown ? undefined : toggleTree($))}
+          >
+            Tree
+          </Button>
+          <Button
+            key="list-view"
+            variant={isTreeShown ? 'secondary' : 'primary'}
+            onPress={() => (isTreeShown ? toggleTree($) : undefined)}
+          >
+            List
+          </Button>
+        </Box>
+        <Box flexDirection="row" gap="xs">
+          <Button key="context" dimColor={!isContextShown} onPress={() => toggleContext($)}>
+            {isContextShown ? '✓ Context' : 'Context'}
+          </Button>
+          {Input !== undefined && (
+            <Button key="search-toggle" variant={isSearchShown ? 'primary' : 'secondary'} onPress={() => toggleSearch($)}>
+              Find
+            </Button>
+          )}
+        </Box>
+      </Box>
+      <Text size="caption" dimColor>
+        {count}
+      </Text>
+      {isSearchShown && Input !== undefined && (
+        <Input
+          key={fieldKey}
+          placeholder="Search every prompt"
+          submitLabel="Search"
+          autoFocus
+          onInput={value => typed($, value)}
+          onSubmit={value => typed($, value, true)}
+        />
+      )}
+    </Box>
+  )
+  const note = (title: string, body: string) => (
+    <Box flexDirection="column">
+      {header}
+      <Text dimColor>{title}</Text>
+      <Text size="caption" dimColor>
+        {body}
+      </Text>
+    </Box>
+  )
+
+  if (e.props.view.agentId !== undefined) {
+    return note("An agent's transcript", 'Switch back to the main one for its prompts.')
+  }
+  if (isFiltered && results.total === 0) {
+    return note('No prompt holds that', 'Fewer or shorter words find more.')
+  }
+  // The matches drawn, by id, and the older ones left out.
+  const lit = new Map(isFiltered ? results.hits.map(hit => [hit.id, hit]) : [])
+  const more = isFiltered ? results.total - lit.size : 0
+  const narrow = more > 0 && (
+    <Text size="caption" dimColor>
+      {`${more} older match${more === 1 ? '' : 'es'}: add a word to narrow`}
+    </Text>
+  )
+  // A prompt in `room` letters, the words a search matched lit.
+  const words = (text: string, hit: SearchHit | undefined, room: number, style: TextProps) => {
+    if (hit === undefined) {
+      return (
+        <Text wrap="truncate" {...style}>
+          {cut(text, room)}
+        </Text>
+      )
+    }
+    const [before, match, after] = fit(hit, room)
+
+    return [
+      before !== '' && <Text {...style}>{before}</Text>,
+      <Text color={MATCH} weight="semibold">
+        {match}
+      </Text>,
+      after !== '' && <Text {...style}>{after}</Text>,
+    ]
+  }
+  const gauge = (percent: number | undefined) => (
+    <Text size="caption" tabular {...contextTone(percent)}>
+      {percent === undefined ? '' : `${percent}%`}
+    </Text>
+  )
+
+  if (isTreeShown) {
+    if (nodes.length === 0) return note('No prompts yet', 'Send one and it lands here.')
+    const pressTree = (pressed: UiPressArgument) => {
+      const key = pressed.element
+      if (key.startsWith(SWITCH)) return continueInApp($, key.slice(SWITCH.length))
+      if (key.startsWith(CHAT)) return openChat($, key.slice(CHAT.length))
+      if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length), pressed.surface)
+
+      return pick($, key, pressed.surface)
+    }
+    // The desktop app opens a chat by its link; the editor and the phone do not.
+    const isApp = e.surface === 'desktop'
+    // Every row's lanes are as wide as the deepest's, so the prompts line up.
+    const lanes = Math.max(...nodes.map(node => node.cells.length))
+    const lane = Math.min(LANE_PX, Math.floor(LANES_PX / lanes))
+    const across = lanes * lane
+    const digits = String(Math.max(...nodes.map(node => node.depth))).length
+    // What the turn did, its context and when it was asked give way to the
+    // prompt in that order, as on the terminal, where the pane is narrow.
+    const space = width - Math.ceil(across / COLUMN_PX) - digits - 2
+    const isTimed = space - AT_COLUMNS - 2 >= 12
+    const isTold = isTimed && space - AT_COLUMNS - TOLD_COLUMNS - 4 >= 12
+    const isGauged = isContextShown && isTold && space - AT_COLUMNS - TOLD_COLUMNS - CONTEXT_COLUMNS - 6 >= 12
+    const room = Math.floor(
+      PROSE *
+        (space -
+          (isTimed ? AT_COLUMNS + 2 : 0) -
+          (isTold ? TOLD_COLUMNS + 2 : 0) -
+          (isGauged ? CONTEXT_COLUMNS + 2 : 0)),
+    )
+    const percents = new Map(list.map(entry => [entry.id, entry.context]))
+
+    // An opened card, set in as far as the prompts: the prompt as far as the
+    // tree keeps it, its turn's last reply, whose branch it is, and what goes
+    // on from it: on a branch, a new chat the app opens at it, or the fork's
+    // own chat; anywhere, the command that does it in a terminal.
+    const card = (node: TreeNode) => {
+      const turn = turns.get(node.id)
+      const command = resumeCommand(turn, sessionId)
+      const isBranch = node.place === 'off' && turn?.end !== undefined && turn.end !== ''
+      const where =
+        node.chat !== undefined
+          ? `From the chat “${node.chat}”.`
+          : node.place === 'off'
+            ? 'A branch a rewind left.'
+            : undefined
+
+      return (
+        <Box flexDirection="row" marginBottom="xs">
+          <Svg source={blankSvg(across)} alt="" width={across} height={1} />
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            minWidth={0}
+            gap="xs"
+            padding="sm"
+            backgroundColor={HIGHLIGHT}
+            borderStyle="round"
+            borderColor={toneHex(node.tone)}
+          >
+            <Text wrap="wrap">{turn?.text ?? node.text}</Text>
+            <Text size="footnote" dimColor italic wrap="wrap">
+              {turn?.reply || 'No reply in the transcript.'}
+            </Text>
+            {where !== undefined && (
+              <Text size="caption" color={toneHex(node.tone)} wrap="wrap">
+                {where}
+              </Text>
+            )}
+            {isApp && isBranch && (
+              <Box flexDirection="row" gap="sm" alignItems="center">
+                <Button key={`${SWITCH}${node.id}`} variant="primary" onPress={pressTree}>
+                  Continue in a new chat
+                </Button>
+                {node.chat !== undefined && (
+                  <Button key={`${CHAT}${node.id}`} onPress={pressTree}>
+                    Open its chat
+                  </Button>
+                )}
+              </Box>
+            )}
+            {command !== undefined && (
+              <Box flexDirection="row" gap="sm" alignItems="center">
+                <Button key={`${COPY}${node.id}`} onPress={pressTree}>
+                  Copy
+                </Button>
+                <Text size="caption" mono dimColor wrap="truncate">
+                  {command}
+                </Text>
+              </Box>
+            )}
+          </Box>
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column">
+        {header}
+        {nodes.map((node, index) => {
+          const isOff = node.place === 'off'
+          const isHere = node.place === 'here'
+          const kind = node.outcome.kind
+          const tone = toneHex(node.tone)
+          const hit = lit.get(node.id)
+          // While searching, a match is lit where it matched and the rest
+          // dim, so the tree keeps its shape.
+          const style: TextProps = isFiltered && hit === undefined ? { dimColor: true } : isHere ? { weight: 'semibold' } : {}
+          const told: TextProps =
+            node.chip !== undefined
+              ? { color: tone }
+              : kind === 'push' || kind === 'commit'
+                ? { color: 'warning' }
+                : kind === 'files'
+                  ? { color: 'success' }
+                  : kind === 'tool'
+                    ? { color: 'suggestion' }
+                    : { dimColor: true }
+
+          return (
+            <Box flexDirection="column">
+              <Box
+                key={`row:${node.id}`}
+                flexDirection="row"
+                alignItems="center"
+                gap="xs"
+                backgroundColor={isHere ? HIGHLIGHT : undefined}
+                hover={{ backgroundColor: HIGHLIGHT }}
+              >
+                <Svg
+                  source={lanesSvg(node, nodes[index - 1], nodes[index + 1], lanes, lane)}
+                  alt={isHere ? 'where the chat stands' : isOff ? 'on a branch' : 'on the chat'}
+                  width={across}
+                  height={ROW_PX}
+                />
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Button key={node.id} plain onPress={pressTree}>
+                    <Text
+                      size="footnote"
+                      tabular
+                      {...(isOff ? { color: tone } : isHere ? { color: ACCENT_HEX, weight: 'semibold' } : { dimColor: true })}
+                    >
+                      {`${String(node.depth).padStart(digits, FIGURE)}  `}
+                    </Text>
+                    {words(node.text, hit, room, style)}
+                  </Button>
+                </Box>
+                {/* Each column as wide on every row, so the columns line up down the tree. */}
+                <Box flexDirection="row" gap="sm" alignItems="center" flexShrink={0}>
+                  {isTold && (
+                    <Box width={TOLD_COLUMNS} justifyContent="flex-end">
+                      <Text size="caption" wrap="truncate" {...told}>
+                        {node.chip ?? node.outcome.label}
+                      </Text>
+                    </Box>
+                  )}
+                  {isGauged && (
+                    <Box width={CONTEXT_COLUMNS} justifyContent="flex-end">
+                      {gauge(percents.get(node.id) ?? node.context)}
+                    </Box>
+                  )}
+                  {isTimed && (
+                    <Box width={AT_COLUMNS} justifyContent="flex-end">
+                      {isHere ? (
+                        <Text size="caption" color={ACCENT_HEX} weight="semibold">
+                          here
+                        </Text>
+                      ) : (
+                        <Text size="caption" tabular dimColor>
+                          {sentAt(node.at, now)}
+                        </Text>
+                      )}
+                    </Box>
+                  )}
+                </Box>
+              </Box>
+              {node.id === openedId && card(node)}
+            </Box>
+          )
+        })}
+        {narrow}
+      </Box>
+    )
+  }
+
+  if (list.length === 0) return note('No prompts yet', 'Send one and it lands here.')
+
+  const press = (pressed: UiPressArgument) => jump($, pressed.element, pressed.surface)
+  const digits = String(list.length).length
+  const room = Math.floor(PROSE * (width - digits - 2 - AGE_COLUMNS - (isContextShown ? CONTEXT_COLUMNS + 2 : 0) - 2))
+  // One row, and under the one picked, the prompt whole as the search reads it.
+  const row = (entry: TimelineEntry, number: number, hit?: SearchHit) => {
+    const isPicked = entry.id === current
+    const style: TextProps = isPicked ? { color: ACCENT, weight: 'semibold' } : {}
+
+    return (
+      <Box flexDirection="column">
+        <Box
+          key={`row:${entry.id}`}
+          flexDirection="row"
+          alignItems="center"
+          gap="xs"
+          paddingY="xs"
+          backgroundColor={isPicked ? HIGHLIGHT : undefined}
+          hover={{ backgroundColor: HIGHLIGHT }}
+        >
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Button key={entry.id} plain onPress={press}>
+              <Text size="footnote" tabular {...(isPicked ? { color: ACCENT } : { dimColor: true })}>
+                {`${String(number).padStart(digits, FIGURE)}  `}
+              </Text>
+              {words(entry.text, hit, room, style)}
+            </Button>
+          </Box>
+          <Box flexDirection="row" gap="sm" alignItems="center" flexShrink={0}>
+            {isContextShown && (
+              <Box width={CONTEXT_COLUMNS} justifyContent="flex-end">
+                {gauge(entry.context)}
+              </Box>
+            )}
+            <Box width={AGE_COLUMNS} justifyContent="flex-end">
+              <Text size="caption" tabular dimColor>
+                {age(entry.at, now)}
+              </Text>
+            </Box>
+          </Box>
+        </Box>
+        {isPicked && (
+          <Box padding="sm" marginBottom="xs" backgroundColor={HIGHLIGHT}>
+            <Text wrap="wrap">{cut(corpus.get(entry.id) ?? entry.text, WHOLE)}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
+  if (isFiltered) {
+    // Matches newest first, each by its place in the timeline.
+    const place = new Map(list.map((entry, index) => [entry.id, index]))
+    const shown = results.hits.filter(hit => place.has(hit.id))
+
+    return (
+      <Box flexDirection="column">
+        {header}
+        {shown.map(hit => {
+          const at = place.get(hit.id)!
+
+          return row(list[at]!, at + 1, hit)
+        })}
+        {narrow}
+      </Box>
+    )
+  }
+
+  return (
+    <Box flexDirection="column">
+      {header}
+      {list.map((entry, index) => row(entry, index + 1))}
+    </Box>
+  )
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -1105,7 +1807,7 @@ export const register: Register = on => {
     await closeSearch($)
     void seed($).catch(() => undefined)
     await update($, opened, () => '')
-    grownAt = -1
+    grownAt = ''
     if (await read($, isTree)) void grow($).catch(() => undefined)
     // The minute also reads in a rewind, which no hook here sees: it writes a
     // record the scan's size check notices.
@@ -1214,7 +1916,10 @@ export const register: Register = on => {
     waiting = []
     corpus.clear()
     turns = new Map()
-    grownAt = -1
+    scans = new Map()
+    kin = new Map()
+    roots = ''
+    grownAt = ''
     await update($, entries, () => [])
     await update($, picked, () => '')
     await update($, tree, () => [])
@@ -1267,6 +1972,24 @@ export const register: Register = on => {
       : isTreeShown && here !== undefined
         ? `${here.depth} turn${here.depth === 1 ? '' : 's'} · ${forks} branch${forks === 1 ? '' : 'es'}`
         : `${list.length} prompt${list.length === 1 ? '' : 's'}`
+    if (e.surface !== 'terminal') {
+      return drawApp($, e, {
+        list,
+        current,
+        isContextShown,
+        fieldKey,
+        isSearchShown,
+        isFiltered,
+        results,
+        isTreeShown,
+        nodes,
+        openedId,
+        now,
+        width,
+        count,
+        sessionId: await $.session.id(),
+      })
+    }
     const controls = SWITCH_COLUMNS + FIND_COLUMNS + CONTEXT_TOGGLE_COLUMNS
     const isNamed = width >= TITLE_COLUMNS + controls + 2 + count.length
     const isCounted = width >= (isNamed ? TITLE_COLUMNS : 1) + controls + 2 + count.length
@@ -1353,9 +2076,9 @@ export const register: Register = on => {
       const pressTree = (pressed: UiPressArgument) => {
         const key = pressed.element
         if (key.startsWith(SWITCH)) return switchTo($, key.slice(SWITCH.length))
-        if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length))
+        if (key.startsWith(COPY)) return copyResume($, key.slice(COPY.length), pressed.surface)
 
-        return pick($, key)
+        return pick($, key, pressed.surface)
       }
 
       const lines = (cells: TreeLine[]) =>
@@ -1406,13 +2129,15 @@ export const register: Register = on => {
 
         return [
           ...said.map(line => row(<Text dimColor italic>{line}</Text>)),
+          node.chat !== undefined && row(<Text color={toneColor(node.tone)}>{cut(`in the chat “${node.chat}”`, width - indent - 2)}</Text>),
           isOff && end !== '' && isSideBySide && row([resume, <Text>{'   '}</Text>, copier]),
           isOff && !(end !== '' && isSideBySide) && row(resume),
           end !== '' && !(isOff && isSideBySide) && row(copier),
         ]
       }
 
-      // Each prompt's context, as the list has it: a branch's prompts too.
+      // Each prompt's context, as the list has it: a branch's prompts too, and
+      // a fork's as its own transcript has it.
       const percents = new Map(list.map(entry => [entry.id, entry.context]))
 
       return (
@@ -1434,7 +2159,7 @@ export const register: Register = on => {
               (isTold ? OUTCOME_COLUMNS + 2 : 0) -
               (isGauged ? CONTEXT_COLUMNS + 2 : 0)
             const kind = node.outcome.kind
-            const percent = percents.get(node.id)
+            const percent = percents.get(node.id) ?? node.context
             // While searching, a match is lit where it matched and the rest
             // dim, so the tree keeps its shape.
             const hit = lit.get(node.id)
@@ -1506,7 +2231,7 @@ export const register: Register = on => {
     if (list.length === 0) return note('No prompts yet', 'Send one and it lands here.')
 
     // One handler for every entry: a press names its Button by key.
-    const press = (pressed: UiPressArgument) => jump($, pressed.element)
+    const press = (pressed: UiPressArgument) => jump($, pressed.element, pressed.surface)
 
     // One row, clipped: while the person drags the dock narrower, the tree
     // drawn for the old width is not redrawn until the drag settles.

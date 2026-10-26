@@ -52,7 +52,9 @@ const PROMPTS = [
 // The engine beneath the plugin, as far as these tests reach it: a transcript
 // of `size` bytes whose tree is SCAN, whose list is `prompts`, and in which
 // `found` is what a grep finds, a store holding `stored`, a shell that appends,
-// an awk that copies, and a `/resume` that takes or not.
+// an awk that copies, and a `/resume` that takes or not. Given `forks`, the
+// project holds those transcripts beside it, by path, each with its tree, and
+// one more that is no fork.
 const engine = (
   on: On,
   resume?: () => Promise<unknown>,
@@ -62,7 +64,8 @@ const engine = (
     prompts = [],
     size = 100,
     found = '',
-  }: { stored?: Record<string, unknown>; prompts?: string[]; size?: number; found?: string } = {},
+    forks,
+  }: { stored?: Record<string, unknown>; prompts?: string[]; size?: number; found?: string; forks?: Record<string, string[]> } = {},
 ) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-20T14:00:00Z') })
   mock.store(on, stored)
@@ -84,21 +87,38 @@ const engine = (
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('fs.exists', () => ({ value: true }))
   on('fs.stat', () => ({ value: { kind: 'file', size, mtimeMs: 0, isLink: false, resolve: false } }))
+  const scanned: string[] = []
+  const ran: string[][] = []
+  if (forks !== undefined) {
+    const file = (name: string) => ({ name, kind: 'file' as const, size: 100, mtimeMs: 0, isLink: false })
+    on('fs.list', (_, e) => ({
+      value:
+        e.path === '/home/me/.claude/projects'
+          ? [{ name: '-work', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }]
+          : ['s1.jsonl', ...Object.keys(forks).map(path => path.slice(path.lastIndexOf('/') + 1)), 'other.jsonl'].map(file),
+    }))
+  }
   on('process.run', (_, e) => {
     const isTreeScan = e.argv[0] === 'awk' && e.argv[1]!.includes('last-prompt')
+    if (isTreeScan) scanned.push(e.argv[2]!)
+    ran.push([...e.argv])
     if (e.argv[0] === 'sh') appended.push([...e.argv])
     if (e.argv[0] === 'awk' && e.argv[1] === '-v') copied.push([...e.argv])
+    // The grep that looks for forks names the files it reads after `--`.
+    const isForkSearch = e.argv[0] === 'grep' && e.argv.includes('--')
 
     return {
       value: {
         exitCode: 0,
         stdout: isTreeScan
-          ? scan.join('\n')
-          : e.argv[0] === 'grep'
-            ? found
-            : e.argv[0] === 'awk'
-              ? prompts.join('\n')
-              : '',
+          ? (forks?.[e.argv[2]!] ?? scan).join('\n')
+          : isForkSearch
+            ? Object.keys(forks ?? {}).join('\n')
+            : e.argv[0] === 'grep'
+              ? found
+              : e.argv[0] === 'awk'
+                ? prompts.join('\n')
+                : '',
         stderr: '',
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -112,7 +132,7 @@ const engine = (
     return {}
   })
 
-  return { clock, toasts, copies, appended, commands, copied }
+  return { clock, toasts, copies, appended, commands, copied, scanned, ran }
 }
 
 const rows = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: unknown; text: string }[]> }) =>
@@ -529,5 +549,151 @@ test('find searches the tree in place, lighting each match and dimming the rest'
   await ui.press({ key: 'search-toggle' })
   expect((await ui.find({ type: 'Text', text: 'sixth' }))?.props).toEqual({ bold: true })
   expect(await ui.find({ type: 'Text', text: '4 turns · 1 branch' })).toBeDefined()
+  await ui.unmount()
+})
+
+// A fork the desktop app made of s1 at b: a session of its own, s2, holding a
+// and b as s1 has them, then its own turn fe, asked after b and newer than any,
+// its first response answered over 40,000 tokens.
+const FORK_PATH = '/home/me/.claude/projects/-work/s2.jsonl'
+const FORK = [
+  'H\tfe',
+  'N\tPassword page (fork)',
+  'T\ta\t\t2026-10-20T13:00:00Z\ta9\t0\t0\t\t0\tfirst"\tfirst reply"',
+  'T\tb\ta\t2026-10-20T13:01:00Z\tb8\t2\t0\t\t0\tsecond"\tsecond reply"',
+  'T\tfe\tb\t2026-10-20T13:10:00Z\tfe9\t0\t1\t\t0\tforked"\tforked reply"\t40000',
+]
+
+const forkRows = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: unknown; text: string }[]> }) =>
+  (await ui.findAll({ type: 'Button' }))
+    .filter(button => /^([a-f]|fe)$/.test(String(button.key)))
+    .map(button => button.text)
+
+test("a fork's own turns are a branch of the tree, under the turn it was made at", async ($, on) => {
+  const { appended, commands, copies, toasts, scanned, clock } = engine(
+    on,
+    () => $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } }),
+    SCAN,
+    { forks: { [FORK_PATH]: FORK }, found: '"uuid":"fe9"' },
+  )
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...WIDE, surface: 'terminal' })
+
+  // The fork's transcript is read; the project's other one is not, as it holds
+  // none of the session's first prompts.
+  expect(scanned).toEqual([TRANSCRIPT, FORK_PATH])
+  // a and b are the session's own, drawn once. fe is the newest asked after b:
+  // it carries on down the lane, and the conversation's turns fork off it.
+  expect(await forkRows(ui)).toEqual([
+    '● 1 first',
+    '● 2 second',
+    '│ ○ 3 third',
+    '│ ○ 4 fourth',
+    '│ ● 3 fifth',
+    '│ ◉ 4 sixth',
+    '○ 3 forked',
+  ])
+  expect(await ui.find({ type: 'Text', text: '4 turns · 2 branches' })).toBeDefined()
+
+  // Its card says which chat it is, and copies the command for that session.
+  await ui.press({ key: 'fe' })
+  expect(await ui.find({ type: 'Text', text: 'forked reply' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'in the chat “Password page (fork)”' })).toBeDefined()
+  await ui.press({ key: 'copy:fe' })
+  expect(copies).toEqual(['/resume-at s2:fe9'])
+
+  // Going on from it points the fork at the turn and resumes the fork.
+  await ui.press({ key: 'switch:fe' })
+  await clock.settle()
+  expect(appended.map(argv => argv[5])).toEqual([FORK_PATH])
+  expect(JSON.parse(appended[0]![4]!)).toEqual({
+    type: 'last-prompt',
+    lastPrompt: 'forked',
+    leafUuid: 'fe9',
+    explicit: true,
+    sessionId: 's2',
+  })
+  expect(commands).toEqual(['/resume s2'])
+  expect(toasts).toEqual(['Copied /resume-at s2:fe9', 'Opening session s2 at message fe9.'])
+  await ui.unmount()
+})
+
+test('on the desktop the lanes are pictures, and a press opens a card where the terminal would scroll', async ($, on) => {
+  const { appended, copied, copies, ran, toasts, clock } = engine(on, undefined, SCAN, {
+    forks: { [FORK_PATH]: FORK },
+    prompts: PROMPTS,
+  })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...WIDE, surface: 'desktop' })
+
+  // The pane's frame names it: the header is the views, as native buttons
+  // with the one shown the primary, and what the view holds.
+  expect(await ui.find({ type: 'Text', text: 'Timeline' })).toBeUndefined()
+  expect((await ui.find({ key: 'tree-toggle' }))?.props).toEqual(expect.objectContaining({ variant: 'primary' }))
+  expect((await ui.find({ key: 'list-view' }))?.props).toEqual(expect.objectContaining({ variant: 'secondary' }))
+  expect(await ui.find({ type: 'Text', text: '4 turns · 2 branches' })).toBeDefined()
+
+  // Each row is its lanes, one picture as wide as every other's, then its
+  // number and prompt; no line is drawn in text.
+  expect(await forkRows(ui)).toEqual(['1  first', '2  second', '3  third', '4  fourth', '3  fifth', '4  sixth', '3  forked'])
+  expect(await ui.findAll({ type: 'Text', text: /[│├╮┬]/ })).toEqual([])
+  const lanes = (await ui.findAll({ type: 'Svg' })).filter(svg => svg.props.height === 28)
+  expect(lanes.map(svg => svg.props.width)).toEqual(Array(7).fill(28))
+  const source = (index: number) => String(lanes[index]!.props.source)
+  // c's branch curves off the lit lane in a colour of its own, its dot hollow.
+  expect(source(2)).toContain('C')
+  expect(source(2)).toContain('<circle cx="21" cy="14" r="3" stroke="#14b8a6"')
+  // Where the chat stands, a lit dot with a halo; the fork's turn, hollow,
+  // on the lane the conversation left, in the main line's colour.
+  expect(source(5)).toContain('fill-opacity="0.25"')
+  expect(source(6)).toContain('<circle cx="7" cy="14" r="3" stroke="#8b5cf6"')
+  // Every row has its context, the fork's from its own transcript, in a
+  // column as wide on every row; c's row leaves it blank.
+  const gauges = (await ui.findAll({ type: 'Text', text: /^\d*%?$/ })).filter(text => text.props.tabular === true && text.props.size === 'caption')
+  expect(gauges.map(gauge => gauge.text)).toEqual(['10%', '75%', '', '95%', '30%', '50%', '20%'])
+
+  // A prompt on the conversation opens its card in place: nothing scrolls,
+  // nothing is said, and its reply shows, as the transcript is not moved to it.
+  await ui.press({ key: 'b' })
+  expect(toasts).toEqual([])
+  expect(await ui.find({ type: 'Text', text: 'second reply' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '/resume-at s1:b9' })).toBeDefined()
+  expect(await ui.find({ key: 'switch:b' })).toBeUndefined()
+
+  // A branch a rewind left goes on in a new chat, as the app's own Fork
+  // does: a copy of the session, pointed at the turn and named for it, which
+  // the app is asked to open by its link. The session itself is not written.
+  await ui.press({ key: 'd' })
+  expect(await ui.find({ type: 'Text', text: 'A branch a rewind left.' })).toBeDefined()
+  expect(await ui.find({ key: 'chat:d' })).toBeUndefined()
+  await ui.press({ key: 'switch:d' })
+  expect(copied).toHaveLength(1)
+  const [, , from, , to, , dst, , source1] = copied[0]!
+  const copyId = to!.slice('to="sessionId":"'.length, -1)
+  const copyPath = `/home/me/.claude/projects/-work/${copyId}.jsonl`
+  expect([from, dst, source1]).toEqual(['from="sessionId":"s1"', `dst=${copyPath}`, TRANSCRIPT])
+  expect(appended.map(argv => [argv[5], JSON.parse(argv[4]!)])).toEqual([
+    [copyPath, { type: 'last-prompt', lastPrompt: 'fourth', leafUuid: 'd9', explicit: true, sessionId: copyId }],
+    [copyPath, { type: 'custom-title', customTitle: 'Branch (turn 4)', sessionId: copyId }],
+  ])
+  expect(ran.at(-1)).toEqual(['/mnt/c/Windows/explorer.exe', `claude://resume?session=${copyId}`])
+  expect(toasts).toEqual(['Opening “Branch (turn 4)”, a new chat that goes on from turn 4.'])
+  expect(await ui.find({ key: 'switch:d' })).toBeUndefined()
+
+  // A fork's says which chat it is, goes on from its own transcript, and
+  // opens that chat as it stands.
+  await ui.press({ key: 'fe' })
+  expect(await ui.find({ type: 'Text', text: 'forked reply' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'From the chat “Password page (fork)”.' })).toBeDefined()
+  await ui.press({ key: 'copy:fe' })
+  expect(copies).toEqual(['/resume-at s2:fe9'])
+  await ui.press({ key: 'chat:fe' })
+  expect(ran.at(-1)).toEqual(['/mnt/c/Windows/explorer.exe', 'claude://resume?session=s2'])
+  await ui.press({ key: 'switch:fe' })
+  expect(copied.at(-1)?.[2]).toBe('from="sessionId":"s2"')
+  expect(copied.at(-1)?.at(-1)).toBe(FORK_PATH)
+  expect(JSON.parse(appended.at(-1)![4]!)).toEqual(expect.objectContaining({ customTitle: 'Password page (fork) (turn 3)' }))
   await ui.unmount()
 })

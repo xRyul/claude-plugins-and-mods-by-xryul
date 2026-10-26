@@ -66,11 +66,17 @@ test('find opens a field whose words filter the timeline once typing pauses', as
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'list-view' })
-    expect((await ui.find({ key: 'search-toggle' }))?.text).toBe('○ find')
+    // The terminal marks the toggle open; the desktop draws it its primary.
+    const toggle = async () => {
+      const found = await ui.find({ key: 'search-toggle' })
+
+      return surface === 'terminal' ? found?.text : `${found?.text} ${found?.props.variant}`
+    }
+    expect(await toggle()).toBe(surface === 'terminal' ? '○ find' : 'Find secondary')
     expect(await field(ui)).toBeUndefined()
 
     await ui.press({ key: 'search-toggle' })
-    expect((await ui.find({ key: 'search-toggle' }))?.text).toBe('● find')
+    expect(await toggle()).toBe(surface === 'terminal' ? '● find' : 'Find primary')
     expect(await field(ui)).toBeDefined()
     keys.push((await field(ui))!)
 
@@ -81,8 +87,9 @@ test('find opens a field whose words filter the timeline once typing pauses', as
 
     await clock.advance(150)
     // Its place in the timeline, then the words just before the match: the
-    // text has 20 columns here, the match a third of the way along.
-    expect(await rows(ui)).toEqual(['2  …er the zebracorn b…'])
+    // text has 20 columns here, 25 letters of the desktop's proportional
+    // text, the match a third of the way along.
+    expect(await rows(ui)).toEqual([surface === 'terminal' ? '2  …er the zebracorn b…' : '2  …iller the zebracorn bug…'])
     expect((await ui.find({ type: 'Text', text: 'zebra' }))?.props).toEqual(expect.objectContaining({ color: 'warning' }))
     expect(await ui.find({ type: 'Text', text: '1 of 3' })).toBeDefined()
 

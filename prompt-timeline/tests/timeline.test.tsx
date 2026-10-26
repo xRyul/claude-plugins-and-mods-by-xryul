@@ -24,8 +24,8 @@ const prompt = (uuid: string, text: string): SessionAppendInput => ({
 
 test('the person\'s prompts are listed, and a press marks the one picked', async ($, on) => {
   // Nothing sits beneath the plugin: each hook here stands for the engine.
-  // The kit does not answer `$.ui.scroll`: the press still marks its row and
-  // says why the transcript did not move.
+  // The kit does not answer `$.ui.scroll`: on the terminal the press still
+  // marks its row and says why the transcript did not move.
   const toasts: string[] = []
   mock.clock(on, { now: Date.parse('2026-10-20T14:00:00Z') })
   mock.store(on)
@@ -49,18 +49,66 @@ test('the person\'s prompts are listed, and a press marks the one picked', async
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'list-view' })
 
-    expect((await ui.find({ key: 'u1' }))?.text).toBe('1  fix the overlay and…')
+    // The desktop's proportional text holds more of a prompt in the same room.
+    expect((await ui.find({ key: 'u1' }))?.text).toBe(
+      surface === 'terminal' ? '1  fix the overlay and…' : '1  fix the overlay and more',
+    )
     expect(await ui.find({ key: 'u2' })).toBeUndefined()
     expect((await ui.find({ key: 'u3' }))?.text).toContain('now add the tests')
     expect(await ui.find({ type: 'Text', text: /just now/ })).toBeDefined()
-
-    await ui.press({ key: 'u3' })
-    const picked = await ui.find({ type: 'Text', text: /now add the tests/ })
-    expect(picked?.props).toEqual(expect.objectContaining({ color: 'claude', bold: true }))
     await ui.unmount()
   }
 
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'u3' })
+  const picked = await ui.find({ type: 'Text', text: /now add the tests/ })
+  expect(picked?.props).toEqual(expect.objectContaining({ color: 'claude', bold: true }))
+  await ui.unmount()
+
+  expect(toasts).toHaveLength(1)
   expect(toasts[0]).toContain("Couldn't scroll to that prompt")
+})
+
+test('on the desktop a press opens the prompt whole under its row, as its transcript cannot be scrolled', async ($, on) => {
+  const toasts: string[] = []
+  mock.clock(on, { now: Date.parse('2026-10-20T14:00:00Z') })
+  mock.store(on)
+  mock.env(on, {})
+  mock.session(on)
+  on('command.register', () => ({ value: { command: 'timeline' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', (_, e) => (toasts.push(e.text), { value: undefined }))
+  on('session.id', () => ({ value: 's1' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // A scroll that was asked would be answered, so the test sees it was not.
+  const scrolls: unknown[] = []
+  on('ui.scroll', (_, e) => (scrolls.push(e), {}))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.session.append(prompt('u1', 'first'))
+  await $.session.append(prompt('u2', `${'a long prompt '.repeat(20)}that ends here`))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The views are native buttons, the one shown the primary.
+  expect((await ui.find({ key: 'tree-toggle' }))?.props).toEqual(expect.objectContaining({ variant: 'primary' }))
+  await ui.press({ key: 'list-view' })
+  expect((await ui.find({ key: 'list-view' }))?.props).toEqual(expect.objectContaining({ variant: 'primary' }))
+  expect((await ui.find({ key: 'tree-toggle' }))?.props).toEqual(expect.objectContaining({ variant: 'secondary' }))
+  expect(await ui.find({ type: 'Text', text: '2 prompts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /that ends here$/ })).toBeUndefined()
+
+  await ui.press({ key: 'u2' })
+  expect(scrolls).toEqual([])
+  expect(toasts).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /^a long prompt/ }))?.props).toEqual(
+    expect.objectContaining({ color: 'claude', weight: 'semibold' }),
+  )
+  expect(await ui.find({ type: 'Text', text: /that ends here$/ })).toBeDefined()
+
+  // A second press closes it.
+  await ui.press({ key: 'u2' })
+  expect(await ui.find({ type: 'Text', text: /that ends here$/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 // The engine beneath the plugin, as far as these tests reach it.

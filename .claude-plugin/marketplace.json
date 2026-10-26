@@ -18,7 +18,7 @@
     {
       "name": "prompt-timeline",
       "source": "./prompt-timeline",
-      "description": "A pane of this session's prompts that opens on a tree of every branch a rewind left, each prompt with what its turn did, its context usage and when it was sent; click one to scroll the transcript to it or continue from its branch, switch to the list for their age, or find to search every prompt's full text. /timeline shows or hides it, and /resume-at opens a session at any of its messages."
+      "description": "A pane of this session's prompts that opens on a tree of every branch a rewind or a fork left, each prompt with what its turn did, its context usage and when it was sent; click one to scroll the transcript to it or continue from its branch, switch to the list for their age, or find to search every prompt's full text. /timeline shows or hides it, and /resume-at opens a session at any of its messages."
     }
   ]
 }

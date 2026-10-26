@@ -25,7 +25,10 @@ export type Outcome = {
 // lines between it and the row above (`above`), and whether the conversation
 // stands at it (`here`), passes through it (`path`), or left it on a branch a
 // rewind abandoned (`off`). `chip` names how many turns a branch the
-// conversation does not run down has, on its first.
+// conversation does not run down has, on its first. `chat` is the title of
+// the chat a fork's own turn is in, a session of its own. `context` is how
+// full the window was, in percent, when its first response was answered, as
+// its transcript records it.
 export type TreeNode = {
   id: string
   text: string
@@ -38,6 +41,8 @@ export type TreeNode = {
   place: 'here' | 'path' | 'off'
   outcome: Outcome
   chip?: string
+  chat?: string
+  context?: number
 }
 
 declare module 'claude-code' {
