@@ -1,0 +1,8 @@
+{
+  "name": "session-images",
+  "version": "0.1.0",
+  "description": "A pane listing the images you pasted and the image files Claude created in this session, newest first with each one's time and size; click a row to open it in the default app. /images shows the pane.",
+  "author": { "name": "xRyul" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

@@ -1,6 +1,6 @@
 {
   "name": "plugins-and-mods-by-xryul",
-  "description": "Claude Code plugins and mods by xRyul: Dracula transcript styling, a Bash permission gate and a prompt timeline pane",
+  "description": "Claude Code plugins and mods by xRyul: Dracula transcript styling, a Bash permission gate, a prompt timeline pane and a session images pane",
   "owner": {
     "name": "xRyul"
   },
@@ -19,6 +19,11 @@
       "name": "prompt-timeline",
       "source": "./prompt-timeline",
       "description": "A pane of this session's prompts that opens on a tree of every branch a rewind or a fork left, each prompt with what its turn did, its context usage and when it was sent; click one to scroll the transcript to it or continue from its branch, switch to the list for their age, or find to search every prompt's full text. /timeline shows or hides it, and /resume-at opens a session at any of its messages."
+    },
+    {
+      "name": "session-images",
+      "source": "./session-images",
+      "description": "A pane listing the images you pasted and the image files Claude created in this session, newest first with each one's time and size; click a row to open it in the default app. /images shows the pane."
     }
   ]
 }
