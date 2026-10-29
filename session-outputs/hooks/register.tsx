@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface, UiPressArgument } from 'claude-code'
 
 import type {
   Group,
@@ -1014,6 +1014,28 @@ export const register: Register = on => {
     // Inline, the frame fits what is drawn, so the keys follow the list.
     const fill = e.props.placement === 'dock' ? { minHeight: e.props.scroll.bodyRows } : {}
 
+    // A key at the foot, its letter in the accent colour a plain Button gives
+    // its hotkey and its label dim until pointed at. It sits in a keyed Box, for
+    // its hover to turn off the inverse Claude Code draws under the pointer.
+    const keyLine = (
+      key: string,
+      hotkey: string,
+      label: string,
+      onPress: (press: UiPressArgument) => unknown,
+    ) => (
+      <Box key={`${key}-row`}>
+        <Button
+          key={key}
+          plain
+          dimColor
+          hotkey={hotkey}
+          label={label}
+          hover={{ inverse: false }}
+          onPress={onPress}
+        />
+      </Box>
+    )
+
     return (
       <Box flexDirection="column" rowGap={1} {...fill}>
         <Box flexDirection="column" rowGap={1} flexGrow={1}>
@@ -1021,28 +1043,14 @@ export const register: Register = on => {
           {group('files', 'Files', String(fileRows.length), fileRows)}
           {group('images', 'Images', imageCount, imageRows)}
         </Box>
-        {/* Keys in the accent colour a plain Button gives its hotkey, labels dim. */}
-        <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+        {/* The keys, one to a line. */}
+        <Box flexDirection="column">
           <Box flexDirection="row">
             <Text color="suggestion">enter:</Text>
             <Text dimColor> open</Text>
           </Box>
-          <Button
-            key="copy"
-            plain
-            dimColor
-            hotkey="c"
-            label="copy link or path"
-            onPress={press => current && copyRow($, current, press.surface)}
-          />
-          <Button
-            key="reveal"
-            plain
-            dimColor
-            hotkey="s"
-            label="show in folder"
-            onPress={() => current && showInFolder($, current)}
-          />
+          {keyLine('copy', 'c', 'copy link or path', press => current && copyRow($, current, press.surface))}
+          {keyLine('reveal', 's', 'show in folder', () => current && showInFolder($, current))}
         </Box>
       </Box>
     )

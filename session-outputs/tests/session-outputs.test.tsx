@@ -631,3 +631,19 @@ test('the keys sit at the foot of a docked pane, and right under the list inline
     await ui.unmount()
   }
 })
+
+test('the keys are stacked one to a line, and do not light up under the pointer', async ($, on) => {
+  files(on, 1_000_500)
+  await $.session.append(pastedRow(PASTED))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const [, keys] = ((await ui.drawn()) as Drawn).children ?? []
+  const lines = keys?.children ?? []
+  expect(keys?.props?.flexDirection).toBe('column')
+  expect(lines).toHaveLength(3)
+  for (const key of ['copy', 'reveal']) {
+    const button = lines.flatMap(line => line.children ?? []).find(child => child.props?.key === key)
+    expect(button?.hover).toEqual({ inverse: false })
+  }
+  await ui.unmount()
+})

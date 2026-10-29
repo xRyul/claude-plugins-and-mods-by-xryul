@@ -1,6 +1,6 @@
 {
   "name": "session-outputs",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "An Outputs pane listing what this session produced: the claude.ai Artifacts Claude published with their kind and version, the documents it wrote, and the images you pasted or it created, newest first; click a row to open it, c copies its link or path, s shows it in its folder. /session-outputs shows the pane.",
   "author": { "name": "xRyul" },
   "license": "MIT",
