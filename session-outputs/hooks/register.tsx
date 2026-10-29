@@ -90,6 +90,11 @@ const showAll = atom(
   { shape: 'groups-1' },
 )
 const selected = atom({ plugin: 'session-outputs', key: 'selected' } as const, '')
+// The key of the element the pane's focus ring is on, '' for none of ours.
+const ring = atom({ plugin: 'session-outputs', key: 'ring' } as const, '')
+// Whether the ring has moved since the pane last let go of the keyboard: a
+// pane that takes it back starts its ring on nothing, and says nothing of it.
+let isRingSet = false
 
 type Found = { path: string; source: ImageGroup }
 type Block = { type: string; [field: string]: unknown }
@@ -764,12 +769,20 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // The row the person tabs to is the one c and s act on.
+  // The row the person tabs to is the one c and s act on, and where the ring
+  // lands is the element Claude Code draws inverted. Both are written before
+  // the ring moves, so no frame shows the row inverted in its own colours.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const moved = await next(e)
     const { element } = e
-    if (moved.deny === undefined && element?.startsWith('open:')) {
-      await update($, selected, () => element)
+    const was = { ring: await read($, ring), selected: await read($, selected), isRingSet }
+    isRingSet = true
+    await update($, ring, () => element ?? '')
+    if (element?.startsWith('open:')) await update($, selected, () => element)
+    const moved = await next(e)
+    if (moved.deny !== undefined) {
+      isRingSet = was.isRingSet
+      await update($, ring, () => was.ring)
+      await update($, selected, () => was.selected)
     }
 
     return moved
@@ -783,6 +796,9 @@ export const register: Register = on => {
     const names = await read($, typeNames)
     const expanded = await read($, showAll)
     const picked = await read($, selected)
+    if (!e.props.isFocused) isRingSet = false
+    // Only the terminal draws the ring as an inverse; a desktop draws its own.
+    const ringOn = e.surface === 'terminal' && isRingSet ? await read($, ring) : ''
     const now = await $.clock.now()
     // One column spare, so a full row never wraps at the frame's edge.
     const width = Math.max(20, e.props.bodyColumns - 1)
@@ -901,7 +917,17 @@ export const register: Register = on => {
 
     const row = (item: Row) => {
       const isCurrent = item.key === current?.key
-      const paint = isCurrent ? { backgroundColor: SELECTED } : {}
+      // Claude Code inverts the row its focus ring is on, part by part, so that
+      // row's colours are swapped here for the inverse to put them back.
+      const isRinged = item.key === ringOn
+      // A part's colours: its own, on the selected row's background.
+      const tint = (color: string | undefined, isDim = false) =>
+        isRinged
+          ? { color: SELECTED, backgroundColor: color ?? (isDim ? 'inactive' : 'text') }
+          : {
+              ...(color !== undefined ? { color } : isDim ? { dimColor: true } : {}),
+              ...(isCurrent ? { backgroundColor: SELECTED } : {}),
+            }
       const glyph = item.glyph ? `${item.glyph.text} ` : ''
       // A space always parts the name, and each cell but the last, from what
       // follows it.
@@ -916,37 +942,30 @@ export const register: Register = on => {
         i === 0 ? item.kindColor : i === 2 && isCurrent && item.isLink ? 'claude' : undefined
 
       // Claude Code inverts a Button under the pointer, each part in its own
-      // colours; a hover on the keyed Box that turns inverse off keeps the row still.
+      // colours; a hover on the keyed Box that turns inverse off keeps the row
+      // still. The ring's row stays inverted, as its colours are drawn for that.
       return (
         <Box key={`row:${item.key}`}>
-          <Button key={item.key} plain hover={{ inverse: false }} onPress={() => openRow($, item)}>
+          <Button key={item.key} plain hover={{ inverse: isRinged }} onPress={() => openRow($, item)}>
             {[
-              <Text key="mark" color="claude" {...paint}>
+              <Text key="mark" {...tint('claude')}>
                 {isCurrent ? '▌ ' : '  '}
               </Text>,
               ...(item.glyph
                 ? [
-                    <Text key="glyph" color={item.glyph.color} {...paint}>
+                    <Text key="glyph" {...tint(item.glyph.color)}>
                       {glyph}
                     </Text>,
                   ]
                 : []),
-              <Text key="name" {...paint}>
+              <Text key="name" {...tint(undefined)}>
                 {name}
               </Text>,
-              ...cells.map((cell, i) => {
-                const color = colorOf(i)
-
-                return (
-                  <Text
-                    key={`cell:${i}`}
-                    {...(color === undefined ? { dimColor: true } : { color })}
-                    {...paint}
-                  >
-                    {cell}
-                  </Text>
-                )
-              }),
+              ...cells.map((cell, i) => (
+                <Text key={`cell:${i}`} {...tint(colorOf(i), true)}>
+                  {cell}
+                </Text>
+              )),
             ]}
           </Button>
         </Box>

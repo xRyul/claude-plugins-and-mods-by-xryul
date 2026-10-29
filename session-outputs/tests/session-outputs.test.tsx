@@ -15,6 +15,10 @@ const PANE = {
   },
 } as const
 
+// The props of a pane the person has given the keyboard.
+const FOCUSED = { ...PANE.props, isFocused: true }
+// The selected row's background.
+const SELECTED = '#33354a'
 const FOLDER = '/tmp/session/images'
 const PASTED = `${FOLDER}/3.png`
 const WINDOWS_PATH = '\\\\wsl.localhost\\Ubuntu\\tmp\\session\\images\\3.png'
@@ -48,8 +52,14 @@ const UPDATED = {
 
 type Answer = { result: unknown; text: string }
 
-// A Box of the drawing, as far as a test looks into it.
-type Drawn = { props?: Record<string, unknown>; children?: Drawn[] }
+// An element of the drawing, as far as a test looks into it.
+type Drawn = {
+  type?: string
+  key?: string
+  props?: { key?: string; children?: unknown[]; [prop: string]: unknown }
+  hover?: { inverse?: boolean }
+  children?: Drawn[]
+}
 
 function entry(name: string) {
   return { name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false }
@@ -140,6 +150,45 @@ async function rowsOf(ui: {
     .map(button => button.text)
 }
 
+// Each row's Button as drawn: its key, its hover, which findAll leaves out,
+// and the props of the parts it is made of.
+async function rowButtonsOf(ui: { drawn: () => Promise<unknown> }) {
+  const rows: { key: string; hover?: { inverse?: boolean }; parts: Record<string, unknown>[] }[] = []
+  const childrenOf = (element: Drawn) =>
+    [...(element.children ?? []), ...(element.props?.children ?? [])].filter(
+      (child): child is Drawn => typeof child === 'object' && child !== null,
+    )
+  const walk = (element: Drawn): void => {
+    const key = element.props?.key ?? element.key
+    if (element.type === 'Button' && key?.startsWith('open:')) {
+      const parts = childrenOf(element).filter(child => child.type === 'Text')
+      rows.push({ key, hover: element.hover, parts: parts.map(part => part.props ?? {}) })
+    }
+    childrenOf(element).forEach(walk)
+  }
+  walk((await ui.drawn()) as Drawn)
+
+  return rows
+}
+
+// The rows drawn with their colours swapped, for the terminal's inverse to
+// show them on the selected row's background.
+async function swappedOf(ui: { drawn: () => Promise<unknown> }) {
+  return (await rowButtonsOf(ui))
+    .filter(row => row.parts.length > 0 && row.parts.every(part => part.color === SELECTED))
+    .map(row => row.key)
+}
+
+// Moves the pane's focus ring onto a row, as the person's Tab does.
+async function focusRow($: Parameters<TestBody>[0], path: string) {
+  return $.ui.focus({
+    component: 'Pane',
+    requestId: 'session-outputs',
+    element: `open:${path}`,
+    origin: { kind: 'person' },
+  })
+}
+
 test('the pane lists pasted and created images, newest first, on every surface', async ($, on) => {
   let opened = 0
   // The pasted folder also holds an image whose line a compaction dropped.
@@ -186,25 +235,75 @@ test('a row does not light up under the pointer', async ($, on) => {
   await $.session.append(pastedRow(`${FOLDER}/1.png`, `${FOLDER}/2.png`))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // The drawn tree carries each Button's hover, which findAll leaves out.
-  const buttons: { key?: string; hover?: { inverse?: boolean } }[] = []
-  const walk = (node: unknown): void => {
-    if (typeof node !== 'object' || node === null) return
-    const element = node as {
-      type?: string
-      key?: string
-      props?: { key?: string; children?: unknown[] }
-      hover?: { inverse?: boolean }
-      children?: unknown[]
-    }
-    if (element.type === 'Button') buttons.push({ key: element.props?.key ?? element.key, hover: element.hover })
-    for (const child of [...(element.children ?? []), ...(element.props?.children ?? [])]) walk(child)
-  }
-  walk(await ui.drawn())
   // Claude Code inverts a Button under the pointer unless its hover says not to.
-  const rows = buttons.filter(button => button.key?.startsWith('open:'))
+  const rows = await rowButtonsOf(ui)
   expect(rows).toHaveLength(2)
   expect(rows.filter(row => row.hover?.inverse !== false)).toEqual([])
+  await ui.unmount()
+})
+
+test('the row the focus ring is on is drawn so its inverse shows one background', async ($, on) => {
+  files(on, 1_000_500)
+  on('ui.focus', () => ({}))
+  const older = `${FOLDER}/1.png`
+  await $.session.append(pastedRow(PASTED, older))
+
+  const ui = await $.ui.mount({ ...PANE, props: FOCUSED, surface: 'terminal' })
+  expect(await swappedOf(ui)).toEqual([])
+  await focusRow($, older)
+
+  // Each part's colour is its background, for the inverse to swap back, and
+  // the row stays inverted under the pointer too.
+  const [newer, ringed] = await rowButtonsOf(ui)
+  expect(await swappedOf(ui)).toEqual([`open:${older}`])
+  expect(ringed?.parts.every(part => part.backgroundColor !== undefined)).toBe(true)
+  expect(ringed?.hover).toEqual({ inverse: true })
+  expect(newer?.hover).toEqual({ inverse: false })
+  await ui.unmount()
+})
+
+test('a pane that takes the keyboard back swaps no row until the ring moves', async ($, on) => {
+  files(on, 1_000_500)
+  on('ui.focus', () => ({}))
+  const older = `${FOLDER}/1.png`
+  await $.session.append(pastedRow(PASTED, older))
+
+  const ui = await $.ui.mount({ ...PANE, props: FOCUSED, surface: 'terminal' })
+  await focusRow($, older)
+  await ui.redraw(PANE.props)
+  expect(await swappedOf(ui)).toEqual([])
+
+  // Taken back, the ring starts on nothing, and the engine says nothing of it.
+  await ui.redraw(FOCUSED)
+  expect(await swappedOf(ui)).toEqual([])
+  await focusRow($, older)
+  expect(await swappedOf(ui)).toEqual([`open:${older}`])
+  await ui.unmount()
+})
+
+test('a ring move another hook refuses leaves the rows as they were', async ($, on) => {
+  files(on, 1_000_500)
+  on('ui.focus', () => ({ deny: 'kept' }))
+  const older = `${FOLDER}/1.png`
+  await $.session.append(pastedRow(PASTED, older))
+
+  const ui = await $.ui.mount({ ...PANE, props: FOCUSED, surface: 'terminal' })
+  expect((await focusRow($, older)).deny).toBe('kept')
+  expect(await swappedOf(ui)).toEqual([])
+  expect((await rowsOf(ui))[0]).toMatch(/^▌ ■ Image #3 /)
+  await ui.unmount()
+})
+
+test('a desktop, which draws its own focus, swaps no row', async ($, on) => {
+  files(on, 1_000_500)
+  on('ui.focus', () => ({}))
+  const older = `${FOLDER}/1.png`
+  await $.session.append(pastedRow(PASTED, older))
+
+  const ui = await $.ui.mount({ ...PANE, props: FOCUSED, surface: 'desktop' })
+  await focusRow($, older)
+  expect(await swappedOf(ui)).toEqual([])
+  expect((await rowsOf(ui))[1]).toMatch(/^▌ ■ Image #1 /)
   await ui.unmount()
 })
 

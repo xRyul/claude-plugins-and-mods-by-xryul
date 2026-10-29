@@ -56,6 +56,8 @@ declare module 'claude-code' {
       showAll: Shaped<Record<Group, boolean>>
       /** The key of the row last focused or opened. */
       selected: string
+      /** The key of the element the pane's focus ring is on, '' for none. */
+      ring: string
     }
   }
 }
