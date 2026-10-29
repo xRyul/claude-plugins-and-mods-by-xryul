@@ -53,9 +53,6 @@ const MAX_PATHS = 100
 // first, checked this many at a time.
 const MAX_BACKFILL_PATHS = 1000
 const STAT_BATCH = 50
-// Headers are read from files up to this size, in their first 256 KiB.
-const MAX_HEADER_FILE = 32 * 1024 * 1024
-const HEADER_BASE64 = 349_524
 // Rows a group shows before "Show more".
 const LIMIT = 5
 // The kind, time and detail columns after a row's name, and the least room a
@@ -71,7 +68,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 // Change a tag when its value's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const images = atom({ plugin: 'session-outputs', key: 'images' } as const, [], {
-  shape: 'images-2',
+  shape: 'images-3',
 })
 const artifacts = atom({ plugin: 'session-outputs', key: 'artifacts' } as const, [], {
   shape: 'artifacts-2',
@@ -252,43 +249,12 @@ async function realPath($: EngineInterface, path: string) {
   return stat?.realPath ?? trimmed
 }
 
-// The pixel size a PNG, GIF or JPEG header states.
-function pixelSize(bytes: Uint8Array) {
-  const at = (i: number) => bytes[i] ?? 0
-  const u16 = (i: number) => (at(i) << 8) | at(i + 1)
-  const u32 = (i: number) => ((u16(i) << 16) | u16(i + 2)) >>> 0
-
-  if (at(0) === 0x89 && at(1) === 0x50) return { width: u32(16), height: u32(20) }
-  if (at(0) === 0x47 && at(1) === 0x49) {
-    return { width: at(6) | (at(7) << 8), height: at(8) | (at(9) << 8) }
-  }
-  if (at(0) === 0xff && at(1) === 0xd8) {
-    // Walk the segments to the frame header (SOF0 to SOF15, less DHT, JPG, DAC).
-    for (let i = 2; i + 9 < bytes.length && at(i) === 0xff; i += 2 + u16(i + 2)) {
-      const marker = at(i + 1)
-      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-        return { width: u16(i + 7), height: u16(i + 5) }
-      }
-    }
-  }
-
-  return {}
-}
-
+// An image's time, from its file's details alone: the file itself is not read.
 async function describe($: EngineInterface, found: Found) {
   const stat = await $.fs.stat(found.path).catch(() => undefined)
   if (stat?.kind !== 'file') return undefined
 
-  let size = {}
-  if (stat.size <= MAX_HEADER_FILE) {
-    const bytes = await $.fs.read(found.path, { as: 'bytes' }).catch(() => undefined)
-    if (bytes) {
-      const head = atob(bytes.base64.slice(0, HEADER_BASE64))
-      size = pixelSize(Uint8Array.from(head, char => char.charCodeAt(0)))
-    }
-  }
-
-  return { ...found, modifiedAt: stat.mtimeMs, ...size }
+  return { ...found, modifiedAt: stat.mtimeMs }
 }
 
 async function describeFile($: EngineInterface, path: string) {
@@ -363,7 +329,7 @@ async function openOnce($: EngineInterface) {
 }
 
 // A pasted image never changes, so one already listed is left alone; an image
-// a tool call writes again is read afresh, for its new time and size.
+// a tool call writes again is looked up afresh, for its new time.
 async function addImages($: EngineInterface, found: readonly Found[]) {
   const known = new Map((await read($, images)).map(image => [image.path, image]))
   const fresh = new Map<string, Found>()
@@ -704,6 +670,14 @@ function fit(text: string, width: number, cutMiddle = false) {
   return pad(`${head}…${tail}`)
 }
 
+// The text in exactly `width` cells, as `fit` cuts it, but padded at its start
+// so that it ends at the edge.
+function fitEnd(text: string, width: number) {
+  const out = fit(text, width).trimEnd()
+
+  return ' '.repeat(Math.max(0, width - cellsOf(out))) + out
+}
+
 // Each path's file name, with its folder's name before it where two share one.
 function namesOf(paths: readonly string[]) {
   const names = paths.map(basename)
@@ -880,7 +854,7 @@ export const register: Register = on => {
               : { text: '◆', color: 'claude' },
           kind: '',
           time: shortTime(image.modifiedAt, now),
-          detail: image.width && image.height ? `${image.width}×${image.height}` : '',
+          detail: '',
         }),
       )
 
@@ -907,15 +881,23 @@ export const register: Register = on => {
     ]
     const current = visible.find(row => row.key === picked) ?? visible[0]
 
-    // Every row is the pane's width: its name takes what the columns leave, and
-    // a narrow pane drops columns from the right before a name gets too short.
+    // Every row is the pane's width: its name takes what its group's columns
+    // leave, and its last cell ends at the edge.
     const room = width - 2
-    let kept = COLUMNS.length
-    const columnsWidth = () => COLUMNS.slice(0, kept).reduce((sum, column) => sum + column, 0)
-    while (kept > 0 && room - columnsWidth() < MIN_NAME) kept -= 1
-    const nameRoom = room - columnsWidth()
+    const widthOf = (columns: readonly number[]) =>
+      columns.reduce((sum, column) => sum + (COLUMNS[column] ?? 0), 0)
+    // The columns a group shows: those any of its rows fills, less the ones a
+    // narrow pane drops from the right before a name gets too short.
+    const columnsOf = (items: readonly Row[]) => {
+      let shown = COLUMNS.flatMap((_, column) =>
+        items.some(item => [item.kind, item.time, item.detail][column]) ? [column] : [],
+      )
+      while (shown.length > 0 && room - widthOf(shown) < MIN_NAME) shown = shown.slice(0, -1)
 
-    const row = (item: Row) => {
+      return shown
+    }
+
+    const row = (shown: readonly number[]) => (item: Row) => {
       const isCurrent = item.key === current?.key
       // Claude Code inverts the row its focus ring is on, part by part, so that
       // row's colours are swapped here for the inverse to put them back.
@@ -931,15 +913,17 @@ export const register: Register = on => {
       const glyph = item.glyph ? `${item.glyph.text} ` : ''
       // A space always parts the name, and each cell but the last, from what
       // follows it.
-      const name = fit(item.name, nameRoom - glyph.length - 1, true) + ' '
+      const name = fit(item.name, room - widthOf(shown) - glyph.length - 1, true) + ' '
       const detail = isCurrent && item.isLink ? `${item.detail} ↗` : item.detail
-      const cells = [item.kind, item.time, detail].slice(0, kept).map((cell, i) => {
-        const column = COLUMNS[i] ?? 0
+      const texts = [item.kind, item.time, detail]
+      const cells = shown.map((column, n) => {
+        const text = texts[column] ?? ''
+        const cellWidth = COLUMNS[column] ?? 0
 
-        return i === COLUMNS.length - 1 ? fit(cell, column) : `${fit(cell, column - 1)} `
+        return n === shown.length - 1 ? fitEnd(text, cellWidth) : `${fit(text, cellWidth - 1)} `
       })
-      const colorOf = (i: number) =>
-        i === 0 ? item.kindColor : i === 2 && isCurrent && item.isLink ? 'claude' : undefined
+      const colorOf = (column: number) =>
+        column === 0 ? item.kindColor : column === 2 && isCurrent && item.isLink ? 'claude' : undefined
 
       // Claude Code inverts a Button under the pointer, each part in its own
       // colours; a hover on the keyed Box that turns inverse off keeps the row
@@ -961,8 +945,8 @@ export const register: Register = on => {
               <Text key="name" {...tint(undefined)}>
                 {name}
               </Text>,
-              ...cells.map((cell, i) => (
-                <Text key={`cell:${i}`} {...tint(colorOf(i), true)}>
+              ...cells.map((cell, n) => (
+                <Text key={`cell:${shown[n]}`} {...tint(colorOf(shown[n] ?? 0), true)}>
                   {cell}
                 </Text>
               )),
@@ -983,7 +967,7 @@ export const register: Register = on => {
             <Text bold>{title}</Text>
             <Text dimColor>{` ${rule} ${count}`}</Text>
           </Box>
-          {shownOf(key, items).map(row)}
+          {shownOf(key, items).map(row(columnsOf(items)))}
           {items.length > LIMIT && (
             <Box key={`more-row:${key}`}>
               <Button

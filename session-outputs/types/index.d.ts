@@ -3,9 +3,6 @@ export type SessionImage = {
   source: 'user' | 'claude'
   /** When the file was last written, milliseconds since the epoch. */
   modifiedAt: number
-  /** Pixel size, read from a PNG, GIF or JPEG header. */
-  width?: number
-  height?: number
 }
 
 export type ImageGroup = SessionImage['source']

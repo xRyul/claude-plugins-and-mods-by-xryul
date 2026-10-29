@@ -22,8 +22,6 @@ const SELECTED = '#33354a'
 const FOLDER = '/tmp/session/images'
 const PASTED = `${FOLDER}/3.png`
 const WINDOWS_PATH = '\\\\wsl.localhost\\Ubuntu\\tmp\\session\\images\\3.png'
-// The first 24 bytes of a 542x624 PNG: signature and IHDR.
-const PNG_HEADER = 'iVBORw0KGgoAAAANSUhEUgAAAh4AAAJwCAIAAAA='
 const ARTIFACT = 'https://claude.ai/artifact/abc123'
 const TYPE = 'https://claude.ai/artifact/TYPE'
 // The Artifact tool's records of a typed Artifact's first publish and of a
@@ -82,8 +80,8 @@ function pastedRow(...paths: string[]) {
 
 // What every test needs from the engine beneath: nothing sits there but these.
 // Every path `isFile` keeps is a file written at `mtimeMs`, a text file reads
-// as `text`, a folder lists what `listing` gives, and each toast lands in
-// `toasts`.
+// as `text`, a folder lists what `listing` gives, each toast lands in
+// `toasts` and each path read in `reads`.
 function files(
   on: Parameters<TestBody>[1],
   mtimeMs: number | (() => number),
@@ -92,12 +90,14 @@ function files(
     text = 'one\ntwo\nthree\n',
     listing = () => [],
     toasts = [],
+    reads = [],
     isFile = () => true,
   }: {
     onOpen?: () => void
     text?: string
     listing?: (path: string) => ReturnType<typeof entry>[]
     toasts?: string[]
+    reads?: string[]
     isFile?: (path: string) => boolean
   } = {},
 ) {
@@ -118,7 +118,11 @@ function files(
         }
       : { kind: 'other', size: 0, mtimeMs: 0, isLink: false },
   }))
-  on('fs.read', (_, e) => ({ value: e.as === 'bytes' ? { base64: PNG_HEADER } : text }))
+  on('fs.read', (_, e) => {
+    reads.push(e.path)
+
+    return { value: text }
+  })
   on('fs.list', (_, e) => ({ value: listing(e.path) }))
   on('env.get', () => ({ value: '/home/me' }))
   on('session.cwd', () => ({ value: '/work' }))
@@ -206,16 +210,31 @@ test('the pane lists pasted and created images, newest first, on every surface',
     const ui = await $.ui.mount({ ...PANE, surface })
 
     const rows = await rowsOf(ui)
-    // The first row is selected; each is its time and pixel size, the
-    // pane's width across.
+    // The first row is selected; each ends at its time, the pane's width across.
     expect(rows).toHaveLength(3)
-    expect(rows[0]).toMatch(/^▌ ■ Image #3 +\d\d:\d\d {2}542×624 {2}$/)
+    expect(rows[0]).toMatch(/^▌ ■ Image #3 +\d\d:\d\d$/)
     expect(rows[1]).toMatch(/^ {2}■ Image #1 /)
-    expect(rows[2]).toMatch(/^ {2}◆ chart\.png +\d\d:\d\d {2}542×624 {2}$/)
+    expect(rows[2]).toMatch(/^ {2}◆ chart\.png +\d\d:\d\d$/)
     expect(rows.every(text => text.length === 39)).toBe(true)
     expect(await ui.find({ type: 'Text', text: / 2 you · 1 Claude$/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('an image is listed by its time alone, its file never read', async ($, on) => {
+  const reads: string[] = []
+  files(on, 1_000_500, { reads })
+  answers(on, { result: {}, text: 'Saved the chart to out/chart.png' })
+
+  await $.session.append(pastedRow(PASTED))
+  await $.tool.call({ tool: 'Bash', command: 'python plot.py' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const rows = await rowsOf(ui)
+  expect(rows).toHaveLength(2)
+  expect(rows.every(row => /\d\d:\d\d$/.test(row))).toBe(true)
+  expect(reads).toEqual([])
+  await ui.unmount()
 })
 
 test('a file the call did not write is not listed', async ($, on) => {
@@ -370,7 +389,7 @@ test('a published Artifact is listed with its kind and version, and opens in the
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await rowsOf(ui)).toEqual([
-    expect.stringMatching(/^▌ Pane mockups design {2}\d\d:\d\d {2}v3 ↗ {5}$/),
+    expect.stringMatching(/^▌ Pane mockups design {2}\d\d:\d\d {7}v3 ↗$/),
   ])
   await ui.press({ key: `open:${ARTIFACT}` })
   expect(ran).toEqual([['/mnt/c/Windows/explorer.exe', ARTIFACT]])
@@ -394,9 +413,9 @@ test('a document Claude writes is listed under Files, an Artifact’s own files 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const rows = await rowsOf(ui)
   expect(rows).toHaveLength(3)
-  expect(rows[1]).toMatch(/^ {2}report\.md {4}md {6}\d\d:\d\d {2}3 lines {2}$/)
+  expect(rows[1]).toMatch(/^ {2}report\.md {4}md {6}\d\d:\d\d {4}3 lines$/)
   // A name cut to fit still leaves a space before the kind.
-  expect(rows[2]).toMatch(/^ {2}quarte…al\.md md {6}\d\d:\d\d {2}3 lines {2}$/)
+  expect(rows[2]).toMatch(/^ {2}quarte…al\.md md {6}\d\d:\d\d {4}3 lines$/)
   expect(await ui.find({ key: 'open:/tmp/canvas/project/Main.dc.html' })).toBeUndefined()
   await ui.unmount()
 })
@@ -514,7 +533,7 @@ test('an empty document has no lines', async ($, on) => {
   await $.tool.call({ tool: 'Bash', command: 'touch notes.md' })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await rowsOf(ui)).toEqual([expect.stringMatching(/ 0 lines {2}$/)])
+  expect(await rowsOf(ui)).toEqual([expect.stringMatching(/ 0 lines$/)])
   await ui.unmount()
 })
 
@@ -608,7 +627,7 @@ test('a session joined midway finds a late file, however many paths came before 
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await rowsOf(ui)).toEqual([
-    expect.stringMatching(/^▌ Pane mockups other {3}\d\d:\d\d {2}v3 ↗/),
+    expect.stringMatching(/^▌ Pane mockups other {3}\d\d:\d\d {7}v3 ↗$/),
     expect.stringMatching(/^ {2}late\.md +md /),
   ])
   await ui.unmount()
