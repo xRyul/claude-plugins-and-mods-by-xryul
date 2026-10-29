@@ -1,7 +1,26 @@
+# Build and test output
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
 *.log
-.DS_Store
+
+# Types Claude Code writes beside each plugin when it loads it
+**/.claude-plugin/types/
+
+# Secrets
 .env*
 !.env.example
+
+# Agent instructions, kept on this machine only
+/AGENTS.md
+/CLAUDE.md
+/CLAUDE.local.md
+.claude/settings.local.json
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
