@@ -990,34 +990,39 @@ export const register: Register = on => {
     ]
       .filter(Boolean)
       .join(' · ')
+    // Docked, the pane fills its column so the keys sit on its last rows.
+    // Inline, the frame fits what is drawn, so the keys follow the list.
+    const fill = e.props.placement === 'dock' ? { minHeight: e.props.scroll.bodyRows } : {}
 
     return (
-      <Box flexDirection="column" rowGap={1}>
-        {group('artifacts', 'Artifacts', String(artifactRows.length), artifactRows)}
-        {group('files', 'Files', String(fileRows.length), fileRows)}
-        {group('images', 'Images', imageCount, imageRows)}
-        <Box flexDirection="column">
-          <Text dimColor>{'─'.repeat(width)}</Text>
-          <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
-            <Box flexDirection="row">
-              <Text bold>enter</Text>
-              <Text dimColor> open</Text>
-            </Box>
-            <Button
-              key="copy"
-              plain
-              hotkey="c"
-              label="copy link or path"
-              onPress={press => current && copyRow($, current, press.surface)}
-            />
-            <Button
-              key="reveal"
-              plain
-              hotkey="s"
-              label="show in folder"
-              onPress={() => current && showInFolder($, current)}
-            />
+      <Box flexDirection="column" rowGap={1} {...fill}>
+        <Box flexDirection="column" rowGap={1} flexGrow={1}>
+          {group('artifacts', 'Artifacts', String(artifactRows.length), artifactRows)}
+          {group('files', 'Files', String(fileRows.length), fileRows)}
+          {group('images', 'Images', imageCount, imageRows)}
+        </Box>
+        {/* Keys in the accent colour a plain Button gives its hotkey, labels dim. */}
+        <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+          <Box flexDirection="row">
+            <Text color="suggestion">enter:</Text>
+            <Text dimColor> open</Text>
           </Box>
+          <Button
+            key="copy"
+            plain
+            dimColor
+            hotkey="c"
+            label="copy link or path"
+            onPress={press => current && copyRow($, current, press.surface)}
+          />
+          <Button
+            key="reveal"
+            plain
+            dimColor
+            hotkey="s"
+            label="show in folder"
+            onPress={() => current && showInFolder($, current)}
+          />
         </Box>
       </Box>
     )

@@ -48,6 +48,9 @@ const UPDATED = {
 
 type Answer = { result: unknown; text: string }
 
+// A Box of the drawing, as far as a test looks into it.
+type Drawn = { props?: Record<string, unknown>; children?: Drawn[] }
+
 function entry(name: string) {
   return { name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false }
 }
@@ -483,4 +486,22 @@ test('a session joined midway finds a late file, however many paths came before 
     expect.stringMatching(/^ {2}late\.md +md /),
   ])
   await ui.unmount()
+})
+
+test('the keys sit at the foot of a docked pane, and right under the list inline', async ($, on) => {
+  files(on, 1_000_500)
+
+  await $.session.append(pastedRow(PASTED))
+
+  for (const placement of ['dock', 'inline'] as const) {
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement }, surface: 'terminal' })
+    const root = (await ui.drawn()) as Drawn
+    const [list, keys] = root.children ?? []
+    // Docked, the pane is the body's height and the list takes what the keys
+    // leave; inline, it is the list's own height.
+    expect(root.props?.minHeight).toBe(placement === 'dock' ? 20 : undefined)
+    expect(list?.props?.flexGrow).toBe(1)
+    expect(JSON.stringify(keys)).toContain('show in folder')
+    await ui.unmount()
+  }
 })
