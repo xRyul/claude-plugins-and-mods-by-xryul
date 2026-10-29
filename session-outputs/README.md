@@ -22,7 +22,8 @@ On WSL, a row opens through `explorer.exe`, the same as a double click: a file i
 ## What it misses
 
 - Screenshots a tool returns without saving them to a file.
-- File paths that contain spaces.
+- A path with spaces that a call names without quotes around it, such as one a script prints.
+- A file a script writes when the call that runs the script never names it, such as a path the script builds from parts.
 - Files Claude created earlier in a session that a compaction has removed from the conversation.
 - The publish time of an Artifact the pane only learns of when it loads midway through a session: those show the time it loaded.
 - Docs made through the Claude Docs connector are matched by the link in its answer, which has not been checked against a real one.

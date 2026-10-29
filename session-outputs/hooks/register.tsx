@@ -19,6 +19,12 @@ const TEXT_EXTENSION = /\.(csv|md|markdown|html?)$/i
 const MAX_TEXT_FILE = 2 * 1024 * 1024
 // The pane's word for an extension that is long.
 const EXTENSION_NAMES: Record<string, string> = { markdown: 'md', htm: 'html' }
+// A tool's input field that holds one whole path, spaces and all.
+const PATH_FIELDS = ['file_path', 'notebook_path']
+// The quotes a name with spaces sits between: `cat "Jane Doe.md"`.
+const QUOTES = ['"', "'", '`']
+// Each folder a command moves to: `cd /vault && ...`, its name maybe quoted.
+const CD = /(?:^|&&|\|\||[;\n(])\s*cd\s+("[^"\n]+"|'[^'\n]+'|[^\s;&|)]+)/g
 // The engine stores each pasted image as a file and records its path in the
 // conversation as this line.
 const PASTED_SOURCE = /\[Image: source: ([^\]\n]+)\]/g
@@ -170,19 +176,57 @@ function stringsIn(value: unknown, out: string[] = []) {
 function outputTokens(texts: readonly string[]) {
   const imagePaths = new Set<string>()
   const documentPaths = new Set<string>()
+  const add = (raw: string) => {
+    const token = raw.replace(/[.:!?]+$/, '')
+    if (token.includes('://')) return
+    if (IMAGE_EXTENSION.test(token)) {
+      if (imagePaths.size < MAX_PATHS) imagePaths.add(token)
+    } else if (FILE_EXTENSION.test(token) && documentPaths.size < MAX_PATHS) {
+      documentPaths.add(token)
+    }
+  }
   for (const text of texts) {
-    for (const raw of text.slice(0, MAX_TEXT).split(/[\s"'`<>()[\]{}|;,=]+/)) {
-      const token = raw.replace(/[.:!?]+$/, '')
-      if (token.includes('://')) continue
-      if (IMAGE_EXTENSION.test(token)) {
-        if (imagePaths.size < MAX_PATHS) imagePaths.add(token)
-      } else if (FILE_EXTENSION.test(token) && documentPaths.size < MAX_PATHS) {
-        documentPaths.add(token)
+    const head = text.slice(0, MAX_TEXT)
+    // A name with spaces is whole only between its quotes. Every stretch
+    // between two of a kind is tried, as an apostrophe can pair them wrong.
+    for (const quote of QUOTES) {
+      for (const part of head.split(quote).slice(1, -1)) {
+        if (part.includes(' ') && !part.includes('\n')) add(part)
       }
     }
+    head.split(/[\s"'`<>()[\]{}|;,=]+/).forEach(add)
   }
 
   return [...imagePaths, ...documentPaths]
+}
+
+// The folders a command moves to, as written: a relative one is the session
+// folder's.
+function foldersOf(command: string) {
+  return [...command.matchAll(CD)].flatMap(match => {
+    const folder = (match[1] ?? '').replace(/^(["'])(.*)\1$/, '$2').replace(/(.)\/+$/, '$1')
+
+    return folder === '' || folder === '-' ? [] : [folder]
+  })
+}
+
+// The paths one call names: its tool's path fields whole, then what its texts
+// name, a relative one also in each folder its command moves to, as in
+// `cd /vault && python3 edit.py "Jane Doe.md"`.
+function callTokens(input: Record<string, unknown>, text: string) {
+  const whole = PATH_FIELDS.flatMap(field => {
+    const path = stringOf(input[field])
+
+    return path && (IMAGE_EXTENSION.test(path) || FILE_EXTENSION.test(path)) ? [path] : []
+  })
+  const folders = typeof input.command === 'string' ? foldersOf(input.command) : []
+  const named = outputTokens([...stringsIn(input), text]).flatMap(token =>
+    token.startsWith('/') || token.startsWith('~/')
+      ? [token]
+      : [token, ...folders.map(folder => `${folder}/${token}`)],
+  )
+
+  return [...new Set([...whole, ...named])]
 }
 
 // Turns a path a tool call named into an absolute one, against `base` or the
@@ -507,7 +551,7 @@ async function backfill($: EngineInterface) {
           published.push({ tool: use.tool, input: use.input, result: use.result, text: use.text ?? '' })
         }
       } else {
-        perCall.push(outputTokens([...stringsIn(use.input), use.text ?? '']))
+        perCall.push(callTokens(use.input, use.text ?? ''))
       }
     }
   }
@@ -713,8 +757,7 @@ export const register: Register = on => {
           await notePublished($, { tool, input, result: ran.result, text: ran.text ?? '' })
         }
       } else {
-        const tokens = outputTokens([...stringsIn(e), ran.text ?? ''])
-        await addCreated($, await findCreated($, tokens, since))
+        await addCreated($, await findCreated($, callTokens(input, ran.text ?? ''), since))
       }
     }
 

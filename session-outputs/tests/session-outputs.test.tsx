@@ -68,8 +68,9 @@ function pastedRow(...paths: string[]) {
 }
 
 // What every test needs from the engine beneath: nothing sits there but these.
-// Every path is a file written at `mtimeMs`, a text file reads as `text`, a
-// folder lists what `listing` gives, and each toast lands in `toasts`.
+// Every path `isFile` keeps is a file written at `mtimeMs`, a text file reads
+// as `text`, a folder lists what `listing` gives, and each toast lands in
+// `toasts`.
 function files(
   on: Parameters<TestBody>[1],
   mtimeMs: number | (() => number),
@@ -78,11 +79,13 @@ function files(
     text = 'one\ntwo\nthree\n',
     listing = () => [],
     toasts = [],
+    isFile = () => true,
   }: {
     onOpen?: () => void
     text?: string
     listing?: (path: string) => ReturnType<typeof entry>[]
     toasts?: string[]
+    isFile?: (path: string) => boolean
   } = {},
 ) {
   on('ui.open', () => {
@@ -92,13 +95,15 @@ function files(
   })
   on('clock.now', () => ({ value: 1_000_000 }))
   on('fs.stat', (_, e) => ({
-    value: {
-      kind: 'file',
-      size: 24,
-      mtimeMs: typeof mtimeMs === 'function' ? mtimeMs() : mtimeMs,
-      isLink: false,
-      realPath: e.path,
-    },
+    value: isFile(e.path)
+      ? {
+          kind: 'file',
+          size: 24,
+          mtimeMs: typeof mtimeMs === 'function' ? mtimeMs() : mtimeMs,
+          isLink: false,
+          realPath: e.path,
+        }
+      : { kind: 'other', size: 0, mtimeMs: 0, isLink: false },
   }))
   on('fs.read', (_, e) => ({ value: e.as === 'bytes' ? { base64: PNG_HEADER } : text }))
   on('fs.list', (_, e) => ({ value: listing(e.path) }))
@@ -264,6 +269,30 @@ test('a document Claude writes is listed under Files, an Artifact’s own files 
   // A name cut to fit still leaves a space before the kind.
   expect(rows[2]).toMatch(/^ {2}quarte…al\.md md {6}\d\d:\d\d {2}3 lines {2}$/)
   expect(await ui.find({ key: 'open:/tmp/canvas/project/Main.dc.html' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a document whose name has spaces is listed, from a path field or a command that moved folder', async ($, on) => {
+  const vault = '/mnt/d/My Vault'
+  const meeting = `${vault}/2026-10-29 - Standup.md`
+  const person = `${vault}/Jane Doe.md`
+  // Only these two are files: a name cut at its spaces, or looked for in the
+  // session's folder, is not.
+  files(on, 1_000_500, { isFile: path => path === meeting || path === person })
+  const calls = answers(on, { result: {}, text: `The file ${meeting} has been updated.` })
+
+  await $.tool.call({ tool: 'Edit', file_path: meeting, old_string: 'a', new_string: 'b' } as never)
+  // The script writes the note; the command names it only to back it up.
+  calls.answer = { result: {}, text: '' }
+  await $.tool.call({
+    tool: 'Bash',
+    command: `cd "${vault}/" && cp "Jane Doe.md" /tmp/backup/ && python3 update.py`,
+  })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await rowsOf(ui)).toHaveLength(2)
+  expect(await ui.find({ key: `open:${meeting}` })).toBeDefined()
+  expect(await ui.find({ key: `open:${person}` })).toBeDefined()
   await ui.unmount()
 })
 
