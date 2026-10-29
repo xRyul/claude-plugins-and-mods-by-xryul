@@ -915,10 +915,11 @@ export const register: Register = on => {
       const colorOf = (i: number) =>
         i === 0 ? item.kindColor : i === 2 && isCurrent && item.isLink ? 'claude' : undefined
 
-      // The keyed Box is what the pointer hovers, lighting the whole row.
+      // Claude Code inverts a Button under the pointer, each part in its own
+      // colours; a hover on the keyed Box that turns inverse off keeps the row still.
       return (
         <Box key={`row:${item.key}`}>
-          <Button key={item.key} plain hover={{ inverse: true }} onPress={() => openRow($, item)}>
+          <Button key={item.key} plain hover={{ inverse: false }} onPress={() => openRow($, item)}>
             {[
               <Text key="mark" color="claude" {...paint}>
                 {isCurrent ? '▌ ' : '  '}
@@ -969,7 +970,7 @@ export const register: Register = on => {
               <Button
                 key={`more:${key}`}
                 plain
-                hover={{ underline: true }}
+                hover={{ underline: true, inverse: false }}
                 onPress={() =>
                   update($, showAll, state => ({ ...state, [key]: !state[key] }))
                 }

@@ -181,6 +181,33 @@ test('a file the call did not write is not listed', async ($, on) => {
   await ui.unmount()
 })
 
+test('a row does not light up under the pointer', async ($, on) => {
+  files(on, 1_000_500)
+  await $.session.append(pastedRow(`${FOLDER}/1.png`, `${FOLDER}/2.png`))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // The drawn tree carries each Button's hover, which findAll leaves out.
+  const buttons: { key?: string; hover?: { inverse?: boolean } }[] = []
+  const walk = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return
+    const element = node as {
+      type?: string
+      key?: string
+      props?: { key?: string; children?: unknown[] }
+      hover?: { inverse?: boolean }
+      children?: unknown[]
+    }
+    if (element.type === 'Button') buttons.push({ key: element.props?.key ?? element.key, hover: element.hover })
+    for (const child of [...(element.children ?? []), ...(element.props?.children ?? [])]) walk(child)
+  }
+  walk(await ui.drawn())
+  // Claude Code inverts a Button under the pointer unless its hover says not to.
+  const rows = buttons.filter(button => button.key?.startsWith('open:'))
+  expect(rows).toHaveLength(2)
+  expect(rows.filter(row => row.hover?.inverse !== false)).toEqual([])
+  await ui.unmount()
+})
+
 test('a long group shows the newest five until asked for more', async ($, on) => {
   files(on, 1_000_500)
 
