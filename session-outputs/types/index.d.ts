@@ -61,7 +61,6 @@ declare module 'claude-code' {
       changes: Shaped<SessionChange[]>
       /** Each Artifact type's name the session has seen, by the type's link. */
       typeNames: Record<string, string>
-      hasAutoOpened: boolean
       showAll: Shaped<Record<Group, boolean>>
       /** The key of the row last focused or opened. */
       selected: string

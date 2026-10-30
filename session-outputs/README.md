@@ -14,7 +14,7 @@ Each group is newest first, shows five rows until you ask for more, and is hidde
 - `c` copies its link, or its path.
 - `s` shows it in its folder: the file selected in Explorer on WSL, or the folder an Artifact's files are kept in.
 
-The pane opens by itself the first time a session has something to list. `/session-outputs` opens it again after you close it.
+The pane stays closed until you ask for it: `/session-outputs` opens it, and it lists everything from the start of the session.
 
 ## Opening things
 

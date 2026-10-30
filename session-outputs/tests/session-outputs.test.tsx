@@ -219,11 +219,28 @@ async function focusRow($: Parameters<TestBody>[0], path: string) {
   })
 }
 
-test('the pane lists pasted and created images, newest first, on every surface', async ($, on) => {
+test('the pane stays closed while the session makes things, until /session-outputs opens it', async ($, on) => {
   let opened = 0
+  const disk: Record<string, string> = { [CODE_FILE]: 'one\n' }
+  files(on, 1_000_500, { onOpen: () => (opened += 1), disk })
+  const calls = answers(on, { result: {}, text: 'Saved the chart to out/chart.png' })
+
+  await $.session.append(pastedRow(PASTED))
+  await $.tool.call({ tool: 'Bash', command: 'python plot.py' })
+  calls.answer = edited('')
+  await editCall($)
+  calls.answer = CREATED
+  await artifactCall($, { type_url: TYPE, title: 'Pane mockups' })
+
+  expect(opened).toBe(0)
+  const { text } = await $.command.run({ command: 'session-outputs', args: '' } as never)
+  expect(opened).toBe(1)
+  expect(text).toBe('Outputs pane opened.')
+})
+
+test('the pane lists pasted and created images, newest first, on every surface', async ($, on) => {
   // The pasted folder also holds an image whose line a compaction dropped.
   files(on, 1_000_500, {
-    onOpen: () => (opened += 1),
     listing: path => (path === FOLDER ? [entry('1.png'), entry('3.png'), entry('notes.txt')] : []),
   })
   answers(on, { result: {}, text: 'Saved the chart to out/chart.png' })
@@ -231,7 +248,6 @@ test('the pane lists pasted and created images, newest first, on every surface',
   await $.session.append(pastedRow(PASTED))
   await $.tool.call({ tool: 'Bash', command: 'python plot.py' })
 
-  expect(opened).toBe(1)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
 

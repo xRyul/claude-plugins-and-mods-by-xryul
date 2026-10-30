@@ -88,10 +88,6 @@ const changes = atom({ plugin: 'session-outputs', key: 'changes' } as const, [],
   shape: 'changes-1',
 })
 const typeNames = atom({ plugin: 'session-outputs', key: 'typeNames' } as const, {})
-const hasAutoOpened = atom(
-  { plugin: 'session-outputs', key: 'hasAutoOpened' } as const,
-  false,
-)
 const showAll = atom(
   { plugin: 'session-outputs', key: 'showAll' } as const,
   { artifacts: false, changes: false, files: false, images: false },
@@ -400,14 +396,6 @@ async function findCreated(
   return [...new Set(found)]
 }
 
-// The pane opens by itself the first time a session has something to list.
-async function openOnce($: EngineInterface) {
-  if (!(await read($, hasAutoOpened))) {
-    await update($, hasAutoOpened, () => true)
-    void $.ui.open({ id: PANE, title: TITLE })
-  }
-}
-
 // A pasted image never changes, so one already listed is left alone; an image
 // a tool call writes again is looked up afresh, for its new time.
 async function addImages($: EngineInterface, found: readonly Found[]) {
@@ -427,7 +415,6 @@ async function addImages($: EngineInterface, found: readonly Found[]) {
 
   const changed = new Set(added.map(image => image.path))
   await update($, images, list => [...list.filter(image => !changed.has(image.path)), ...added])
-  await openOnce($)
 }
 
 // A file written again replaces what was stored for it.
@@ -438,7 +425,6 @@ async function addFiles($: EngineInterface, paths: readonly string[]) {
 
   const changed = new Set(added.map(file => file.path))
   await update($, files, list => [...list.filter(file => !changed.has(file.path)), ...added])
-  await openOnce($)
 }
 
 async function addCreated($: EngineInterface, paths: readonly string[]) {
@@ -483,17 +469,15 @@ async function copyPathOf($: EngineInterface, path: string) {
 // them; a file gone, or too large to read, keeps the counts it had.
 async function countChange($: EngineInterface, path: string, before: string) {
   const stat = await $.fs.stat(path).catch(() => undefined)
-  if (stat?.kind !== 'file' || stat.size > MAX_TEXT_FILE) return false
+  if (stat?.kind !== 'file' || stat.size > MAX_TEXT_FILE) return
 
   const [now, then] = await Promise.all(
     [path, before].map(file => $.fs.read(file, { as: 'text' }).catch(() => undefined)),
   )
-  if (typeof now !== 'string' || typeof then !== 'string') return false
+  if (typeof now !== 'string' || typeof then !== 'string') return
 
   const change: SessionChange = { path, before, modifiedAt: stat.mtimeMs, ...lineChanges(then, now) }
   await update($, changes, list => [...list.filter(other => other.path !== path), change])
-
-  return true
 }
 
 // A file an edit tool changed. The first change of the session keeps a copy
@@ -509,7 +493,7 @@ async function addChange($: EngineInterface, edited: Edited) {
     )
     if (!isKept) return
   }
-  if (await countChange($, path, before)) await openOnce($)
+  await countChange($, path, before)
 }
 
 // Counts again each change whose file a later call wrote, such as a command
@@ -567,7 +551,6 @@ async function saveArtifact(
     ...list.filter(other => other.url !== artifact.url),
     { ...artifact, publishedAt },
   ])
-  await openOnce($)
 }
 
 // What an Artifact call tells: a type's name, a publish, or a delete. Read
