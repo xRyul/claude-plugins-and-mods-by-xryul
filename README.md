@@ -7,7 +7,7 @@ A Claude Code marketplace with four plugins. Install only the ones you want.
 | [dracula-theme-mod](./dracula-theme-mod) | Dracula transcript styling: tool call cards, coloured status lines, inline code pills and no dots |
 | [bash-permissions](./bash-permissions) | Asks before dangerous Bash commands, showing the whole command, a one-sentence explanation and a danger score |
 | [prompt-timeline](./prompt-timeline) | A pane of this session's prompts, opening on a tree of every rewind or fork branch with each turn's context usage; click one to jump to it or continue from it, or list and search them |
-| [session-outputs](./session-outputs) | An Outputs pane of this session's Artifacts, the documents Claude wrote, and the images you pasted or Claude created; click one to open it in its default app or the browser |
+| [session-outputs](./session-outputs) | An Outputs pane of this session's Artifacts, the files Claude changed with their lines gained and lost, the documents Claude wrote, and the images you pasted or Claude created; click one to open it in its default app or the browser, or a change as a diff in VS Code |
 
 ## Install
 

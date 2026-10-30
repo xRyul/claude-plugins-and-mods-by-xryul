@@ -5,6 +5,7 @@ import type {
   Group,
   ImageGroup,
   SessionArtifact,
+  SessionChange,
   SessionFile,
   SessionImage,
 } from '../types'
@@ -12,6 +13,13 @@ import type {
 const PANE = 'session-outputs'
 const TITLE = 'Outputs'
 const EXPLORER = '/mnt/c/Windows/explorer.exe'
+// VS Code's command line, which opens two files side by side with `--diff`.
+const CODE = 'code'
+// The tools whose own record of a call holds the file as it was before.
+const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit']
+// A diff takes the shortest path up to this many changed lines; past it, it
+// counts the lines each side has that the other lacks, in any order.
+const MAX_EDITS = 1000
 const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|bmp|svg|avif|tiff?|ico|heic)$/i
 // Documents a tool call writes. A text one's lines are counted, up to this size.
 const FILE_EXTENSION = /\.(pdf|docx?|odt|rtf|pptx?|odp|key|xlsx?|ods|csv|md|markdown|html?)$/i
@@ -76,6 +84,9 @@ const artifacts = atom({ plugin: 'session-outputs', key: 'artifacts' } as const,
 const files = atom({ plugin: 'session-outputs', key: 'files' } as const, [], {
   shape: 'files-1',
 })
+const changes = atom({ plugin: 'session-outputs', key: 'changes' } as const, [], {
+  shape: 'changes-1',
+})
 const typeNames = atom({ plugin: 'session-outputs', key: 'typeNames' } as const, {})
 const hasAutoOpened = atom(
   { plugin: 'session-outputs', key: 'hasAutoOpened' } as const,
@@ -83,8 +94,8 @@ const hasAutoOpened = atom(
 )
 const showAll = atom(
   { plugin: 'session-outputs', key: 'showAll' } as const,
-  { artifacts: false, files: false, images: false },
-  { shape: 'groups-1' },
+  { artifacts: false, changes: false, files: false, images: false },
+  { shape: 'groups-2' },
 )
 const selected = atom({ plugin: 'session-outputs', key: 'selected' } as const, '')
 // The key of the element the pane's focus ring is on, '' for none of ours.
@@ -94,6 +105,10 @@ const ring = atom({ plugin: 'session-outputs', key: 'ring' } as const, '')
 let isRingSet = false
 
 type Found = { path: string; source: ImageGroup }
+// A file an edit tool changed, and what it held before, '' for a new one.
+type Edited = { path: string; before: string }
+// A part of a row's last cell, in its own colour.
+type Part = { text: string; color?: string }
 type Block = { type: string; [field: string]: unknown }
 // A call to the Artifact tool or the Docs connector, with the tool's record of
 // it and the text the model read.
@@ -113,6 +128,10 @@ type Row = {
   kindColor?: string
   time: string
   detail: string
+  // A change's counts, drawn in place of `detail` where they fit.
+  counts?: Part[]
+  // A change's copy from before, which opening shows it against.
+  before?: string
 }
 
 function basename(path: string) {
@@ -123,8 +142,11 @@ function dirname(path: string) {
   return path.slice(0, path.lastIndexOf('/')) || '/'
 }
 
+// A file's extension, '' for a name with none, such as `Makefile`.
 function extension(path: string) {
-  const name = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+  const file = basename(path)
+  const dot = file.lastIndexOf('.')
+  const name = dot < 0 ? '' : file.slice(dot + 1).toLowerCase()
 
   return EXTENSION_NAMES[name] ?? name
 }
@@ -264,12 +286,70 @@ async function describeFile($: EngineInterface, path: string) {
   const file: SessionFile = { path, modifiedAt: stat.mtimeMs, size: stat.size }
   if (TEXT_EXTENSION.test(path) && stat.size <= MAX_TEXT_FILE) {
     const text = await $.fs.read(path, { as: 'text' }).catch(() => undefined)
-    if (typeof text === 'string') {
-      file.lines = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
-    }
+    if (typeof text === 'string') file.lines = linesOf(text).length
   }
 
   return file
+}
+
+// A text's lines, without the empty one after its last newline.
+function linesOf(text: string) {
+  const lines = text === '' ? [] : text.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+
+  return lines
+}
+
+// How many lines two texts share in order, by Myers' shortest edit; past
+// MAX_EDITS changes, how many lines of one the other also has.
+function commonLines(a: readonly string[], b: readonly string[]) {
+  const max = Math.min(a.length + b.length, MAX_EDITS)
+  // The furthest line of `a` reached on each diagonal, `max` its middle.
+  const reach = new Int32Array(2 * max + 2)
+  for (let d = 0; d <= max; d += 1) {
+    for (let k = -d; k <= d; k += 2) {
+      const down = reach[max + k + 1] ?? 0
+      const right = reach[max + k - 1] ?? 0
+      let x = k === -d || (k !== d && right < down) ? down : right + 1
+      let y = x - k
+      while (x < a.length && y < b.length && a[x] === b[y]) {
+        x += 1
+        y += 1
+      }
+      reach[max + k] = x
+      if (x >= a.length && y >= b.length) return (a.length + b.length - d) / 2
+    }
+  }
+  const left = new Map<string, number>()
+  for (const line of a) left.set(line, (left.get(line) ?? 0) + 1)
+  let shared = 0
+  for (const line of b) {
+    const count = left.get(line) ?? 0
+    if (count > 0) {
+      shared += 1
+      left.set(line, count - 1)
+    }
+  }
+
+  return shared
+}
+
+// The lines `after` has gained and lost against `before`, the head and tail
+// they share set aside before they are diffed.
+function lineChanges(before: string, after: string) {
+  const a = linesOf(before)
+  const b = linesOf(after)
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1
+    endB -= 1
+  }
+  const shared = commonLines(a.slice(start, endA), b.slice(start, endB))
+
+  return { added: endB - start - shared, removed: endA - start - shared }
 }
 
 // The pasted images the texts name, plus every image in the folders they sit
@@ -372,6 +452,80 @@ async function addCreated($: EngineInterface, paths: readonly string[]) {
     $,
     paths.filter(path => FILE_EXTENSION.test(path)),
   )
+}
+
+// The file an edit tool's own record of a call says it changed, and what the
+// file held before; undefined for a call held for review, or a file too large
+// for the record to hold.
+function editedBy(tool: string, result: unknown): Edited | undefined {
+  const record = recordOf(result)
+  const path = stringOf(record.filePath) ?? stringOf(record.notebook_path)
+  if (!EDIT_TOOLS.includes(tool) || !path || record.staged === true) return undefined
+
+  const before = tool === 'NotebookEdit' ? record.original_file : record.originalFile
+  if (typeof before === 'string') return { path, before }
+  // A file the call created held nothing.
+  const isCreated = tool === 'Edit' ? record.oldString === '' : record.type === 'create'
+
+  return before === null && isCreated ? { path, before: '' } : undefined
+}
+
+// Where the copy of a file from before the session changed it is kept: under
+// the session's own folder, at the file's own path, so a diff is titled with
+// the file's name and the editor reads its language from it.
+async function copyPathOf($: EngineInterface, path: string) {
+  const temp = ((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')
+
+  return `${temp}/claude-session-outputs/${await $.session.id()}${path}`
+}
+
+// Counts a changed file's lines against its copy from before, and stores
+// them; a file gone, or too large to read, keeps the counts it had.
+async function countChange($: EngineInterface, path: string, before: string) {
+  const stat = await $.fs.stat(path).catch(() => undefined)
+  if (stat?.kind !== 'file' || stat.size > MAX_TEXT_FILE) return false
+
+  const [now, then] = await Promise.all(
+    [path, before].map(file => $.fs.read(file, { as: 'text' }).catch(() => undefined)),
+  )
+  if (typeof now !== 'string' || typeof then !== 'string') return false
+
+  const change: SessionChange = { path, before, modifiedAt: stat.mtimeMs, ...lineChanges(then, now) }
+  await update($, changes, list => [...list.filter(other => other.path !== path), change])
+
+  return true
+}
+
+// A file an edit tool changed. The first change of the session keeps a copy
+// of what it held, which every later count and diff is against.
+async function addChange($: EngineInterface, edited: Edited) {
+  const path = await realPath($, edited.path)
+  const known = (await read($, changes)).find(change => change.path === path)
+  const before = known?.before ?? (await copyPathOf($, path))
+  if (!known) {
+    const isKept = await $.fs.write(before, edited.before).then(
+      () => true,
+      () => false,
+    )
+    if (!isKept) return
+  }
+  if (await countChange($, path, before)) await openOnce($)
+}
+
+// Counts again each change whose file a later call wrote, such as a command
+// that formats it or puts it back.
+async function refreshChanges($: EngineInterface) {
+  const list = await read($, changes)
+  for (let i = 0; i < list.length; i += STAT_BATCH) {
+    await Promise.all(
+      list.slice(i, i + STAT_BATCH).map(async change => {
+        const stat = await $.fs.stat(change.path).catch(() => undefined)
+        if (stat?.kind === 'file' && stat.mtimeMs !== change.modifiedAt) {
+          await countChange($, change.path, change.before)
+        }
+      }),
+    )
+  }
 }
 
 async function nameType($: EngineInterface, typeUrl: unknown, typeName: unknown) {
@@ -515,6 +669,8 @@ async function backfill($: EngineInterface) {
   )
   const published: Call[] = []
   const perCall: string[][] = []
+  // Each changed file with what it held before its first change.
+  const edited = new Map<string, Edited>()
   for (const row of rows) {
     for (const use of row.toolUses) {
       if (use.tool === 'Artifact' || DOCS_TOOL.test(use.tool)) {
@@ -522,6 +678,8 @@ async function backfill($: EngineInterface) {
           published.push({ tool: use.tool, input: use.input, result: use.result, text: use.text ?? '' })
         }
       } else {
+        const change = use.isError ? undefined : editedBy(use.tool, use.result)
+        if (change && !edited.has(change.path)) edited.set(change.path, change)
         perCall.push(callTokens(use.input, use.text ?? ''))
       }
     }
@@ -541,6 +699,7 @@ async function backfill($: EngineInterface) {
     pasted.map(path => ({ path, source: 'user' as const })),
   )
   await addCreated($, await findCreated($, [...tokens], startedAt))
+  for (const change of edited.values()) await addChange($, change)
   for (const call of published) await notePublished($, call, true)
 }
 
@@ -554,6 +713,11 @@ async function windowsPath($: EngineInterface, path: string) {
 // explorer.exe on WSL, the same as a double click, and xdg-open elsewhere.
 async function openRow($: EngineInterface, row: Row) {
   await update($, selected, () => row.key)
+  if (row.before !== undefined) {
+    await openDiff($, row, row.before)
+
+    return
+  }
   try {
     if (!row.isLink && !(await $.fs.exists(row.target))) {
       $.ui.toast(`${row.name} no longer exists`)
@@ -571,6 +735,31 @@ async function openRow($: EngineInterface, row: Row) {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     $.ui.toast(`Could not open ${row.name}: ${reason}`)
+  }
+}
+
+// A change as a diff in VS Code: its copy from before on the left, the file
+// as it is now on the right.
+async function openDiff($: EngineInterface, row: Row, before: string) {
+  try {
+    if (!(await $.fs.exists(row.target))) {
+      $.ui.toast(`${row.name} no longer exists`)
+
+      return
+    }
+    if (!(await $.fs.exists(before))) {
+      $.ui.toast(`The copy of ${row.name} from before was removed`)
+
+      return
+    }
+    const ran = await $.process.run([CODE, '--diff', before, row.target], { timeoutMs: 30_000 })
+    if (ran.exitCode !== 0) {
+      throw new Error(ran.stderr.trim() || `${CODE} exited with ${ran.exitCode}`)
+    }
+    $.ui.toast(`Opened the changes to ${row.name} in VS Code`)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    $.ui.toast(`Could not open the changes to ${row.name}: ${reason}`)
   }
 }
 
@@ -636,6 +825,22 @@ function shortLines(lines: number) {
   if (lines >= 1000) return `${Math.round(lines / 1000)}k lines`
 
   return `${lines} line${lines === 1 ? '' : 's'}`
+}
+
+// "12", or "3k" from a thousand.
+function shortCount(count: number) {
+  return count >= 1000 ? `${Math.round(count / 1000)}k` : String(count)
+}
+
+// A change's counts as its last cell's parts: "+12" green and "-3" red, or a
+// dim "unchanged" for a file that is back as it was.
+function countsOf(change: SessionChange): Part[] {
+  const parts = [
+    ...(change.added > 0 ? [{ text: `+${shortCount(change.added)}`, color: 'success' }] : []),
+    ...(change.removed > 0 ? [{ text: `-${shortCount(change.removed)}`, color: 'error' }] : []),
+  ]
+
+  return parts.length > 0 ? parts : [{ text: 'unchanged' }]
 }
 
 function cellsOf(text: string) {
@@ -736,6 +941,9 @@ export const register: Register = on => {
           await notePublished($, { tool, input, result: ran.result, text: ran.text ?? '' })
         }
       } else {
+        const edited = ran.isError === true ? undefined : editedBy(tool, ran.result)
+        if (edited) await addChange($, edited)
+        await refreshChanges($)
         await addCreated($, await findCreated($, callTokens(input, ran.text ?? ''), since))
       }
     }
@@ -767,6 +975,7 @@ export const register: Register = on => {
     const imageList = await read($, images)
     const artifactList = await read($, artifacts)
     const fileList = await read($, files)
+    const changeList = await read($, changes)
     const names = await read($, typeNames)
     const expanded = await read($, showAll)
     const picked = await read($, selected)
@@ -807,8 +1016,31 @@ export const register: Register = on => {
           artifact.sources.includes(path) ||
           (artifact.root !== undefined && path.startsWith(`${artifact.root}/`)),
       )
+    const shownChanges = changeList
+      .filter(change => !isSource(change.path))
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
+    const changeNames = namesOf(shownChanges.map(change => change.path))
+    const changeRows = shownChanges.map((change, i): Row => {
+      const counts = countsOf(change)
+
+      return {
+        key: `open:${change.path}`,
+        target: change.path,
+        isLink: false,
+        name: changeNames[i] ?? basename(change.path),
+        place: { path: change.path, isFolder: false },
+        kind: extension(change.path),
+        time: shortTime(change.modifiedAt, now),
+        detail: counts.map(part => part.text).join(' '),
+        counts,
+        before: change.before,
+      }
+    })
+
+    // A changed file is its row under Changes, not under Files or Images.
+    const isChanged = (path: string) => changeList.some(change => change.path === path)
     const shownFiles = fileList
-      .filter(file => !isSource(file.path))
+      .filter(file => !isSource(file.path) && !isChanged(file.path))
       .sort((a, b) => b.modifiedAt - a.modifiedAt)
     const fileNames = namesOf(shownFiles.map(file => file.path))
     const fileRows = shownFiles.map(
@@ -828,7 +1060,7 @@ export const register: Register = on => {
       .filter(image => image.source === 'user')
       .sort((a, b) => pastedNumber(b) - pastedNumber(a) || b.modifiedAt - a.modifiedAt)
     const created = imageList
-      .filter(image => image.source === 'claude')
+      .filter(image => image.source === 'claude' && !isChanged(image.path))
       .sort((a, b) => b.modifiedAt - a.modifiedAt)
     const createdNames = namesOf(created.map(image => image.path))
     const labelOf = (image: SessionImage) => {
@@ -858,13 +1090,13 @@ export const register: Register = on => {
         }),
       )
 
-    if (artifactRows.length + fileRows.length + imageRows.length === 0) {
+    if (artifactRows.length + changeRows.length + fileRows.length + imageRows.length === 0) {
       return (
         <Box flexDirection="column">
           <Text bold>Nothing yet</Text>
           <Text dimColor>
-            Images you paste, and the artifacts, documents and images Claude makes,
-            show up here.
+            Images you paste, the artifacts, documents and images Claude makes, and
+            the files it changes show up here.
           </Text>
         </Box>
       )
@@ -876,6 +1108,7 @@ export const register: Register = on => {
     // group shows it, else the first.
     const visible = [
       ...shownOf('artifacts', artifactRows),
+      ...shownOf('changes', changeRows),
       ...shownOf('files', fileRows),
       ...shownOf('images', imageRows),
     ]
@@ -924,6 +1157,29 @@ export const register: Register = on => {
       })
       const colorOf = (column: number) =>
         column === 0 ? item.kindColor : column === 2 && isCurrent && item.isLink ? 'claude' : undefined
+      // A cell as drawn. A change's counts, where they fit whole, each take
+      // their own colour after the cell's padding.
+      const partsOf = (cell: string, column: number) => {
+        const { counts } = item
+        if (column !== 2 || !counts || !cell.endsWith(detail)) {
+          return [
+            <Text key={`cell:${column}`} {...tint(colorOf(column), true)}>
+              {cell}
+            </Text>,
+          ]
+        }
+
+        return [
+          <Text key={`cell:${column}`} {...tint(undefined, true)}>
+            {cell.slice(0, cell.length - detail.length)}
+          </Text>,
+          ...counts.map((part, n) => (
+            <Text key={`count:${n}`} {...tint(part.color, true)}>
+              {n === 0 ? part.text : ` ${part.text}`}
+            </Text>
+          )),
+        ]
+      }
 
       // Claude Code inverts a Button under the pointer, each part in its own
       // colours; a hover on the keyed Box that turns inverse off keeps the row
@@ -945,11 +1201,7 @@ export const register: Register = on => {
               <Text key="name" {...tint(undefined)}>
                 {name}
               </Text>,
-              ...cells.map((cell, n) => (
-                <Text key={`cell:${shown[n]}`} {...tint(colorOf(shown[n] ?? 0), true)}>
-                  {cell}
-                </Text>
-              )),
+              ...cells.flatMap((cell, n) => partsOf(cell, shown[n] ?? 0)),
             ]}
           </Button>
         </Box>
@@ -1024,6 +1276,7 @@ export const register: Register = on => {
       <Box flexDirection="column" rowGap={1} {...fill}>
         <Box flexDirection="column" rowGap={1} flexGrow={1}>
           {group('artifacts', 'Artifacts', String(artifactRows.length), artifactRows)}
+          {group('changes', 'Changes', String(changeRows.length), changeRows)}
           {group('files', 'Files', String(fileRows.length), fileRows)}
           {group('images', 'Images', imageCount, imageRows)}
         </Box>

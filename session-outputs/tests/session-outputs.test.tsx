@@ -48,7 +48,24 @@ const UPDATED = {
   text: `Updated the Artifact at ${ARTIFACT} (Version 3)`,
 }
 
+// A file Claude changes, and where the pane keeps its copy from before: the
+// temporary folder, which every variable names in these tests.
+const CODE_FILE = '/work/app.ts'
+const COPY = `/home/me/claude-session-outputs/s1${CODE_FILE}`
+
 type Answer = { result: unknown; text: string }
+
+// The Edit tool's record of a call that changed CODE_FILE from `before`.
+function edited(before: string) {
+  return {
+    result: { filePath: CODE_FILE, originalFile: before, oldString: 'x', newString: 'y' },
+    text: `The file ${CODE_FILE} has been updated.`,
+  }
+}
+
+async function editCall($: Parameters<TestBody>[0]) {
+  await $.tool.call({ tool: 'Edit', file_path: CODE_FILE, old_string: 'x', new_string: 'y' } as never)
+}
 
 // An element of the drawing, as far as a test looks into it.
 type Drawn = {
@@ -80,14 +97,16 @@ function pastedRow(...paths: string[]) {
 
 // What every test needs from the engine beneath: nothing sits there but these.
 // Every path `isFile` keeps is a file written at `mtimeMs`, a text file reads
-// as `text`, a folder lists what `listing` gives, each toast lands in
-// `toasts` and each path read in `reads`.
+// as what `disk` holds for it or else as `text`, a write lands in `disk`, a
+// folder lists what `listing` gives, each toast lands in `toasts` and each
+// path read in `reads`.
 function files(
   on: Parameters<TestBody>[1],
   mtimeMs: number | (() => number),
   {
     onOpen = () => {},
     text = 'one\ntwo\nthree\n',
+    disk = {},
     listing = () => [],
     toasts = [],
     reads = [],
@@ -95,6 +114,7 @@ function files(
   }: {
     onOpen?: () => void
     text?: string
+    disk?: Record<string, string>
     listing?: (path: string) => ReturnType<typeof entry>[]
     toasts?: string[]
     reads?: string[]
@@ -121,11 +141,17 @@ function files(
   on('fs.read', (_, e) => {
     reads.push(e.path)
 
-    return { value: text }
+    return { value: disk[e.path] ?? text }
+  })
+  on('fs.write', (_, e) => {
+    disk[e.path] = e.text
+
+    return { value: undefined }
   })
   on('fs.list', (_, e) => ({ value: listing(e.path) }))
   on('env.get', () => ({ value: '/home/me' }))
   on('session.cwd', () => ({ value: '/work' }))
+  on('session.id', () => ({ value: 's1' }))
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
 
@@ -664,5 +690,154 @@ test('the keys are stacked one to a line, and do not light up under the pointer'
     const button = lines.flatMap(line => line.children ?? []).find(child => child.props?.key === key)
     expect(button?.hover).toEqual({ inverse: false })
   }
+  await ui.unmount()
+})
+
+test('a file Claude edits is listed under Changes with the lines it gained in green and lost in red', async ($, on) => {
+  const disk: Record<string, string> = { [CODE_FILE]: 'one\n2\nthree\n4\nfive\nsix\n' }
+  files(on, 1_000_500, { disk })
+  answers(on, edited('one\ntwo\nthree\nfour\nfive\n'))
+
+  await editCall($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^Changes$/ })).toBeDefined()
+  // Two lines became others and one was added: three gained, two lost.
+  const rows = await rowsOf(ui)
+  expect(rows).toEqual([expect.stringMatching(/^▌ app\.ts +ts +\d\d:\d\d +\+3 -2$/)])
+  expect(rows[0]).toHaveLength(39)
+  const [row] = await rowButtonsOf(ui)
+  expect(row?.parts.slice(-2).map(part => part.color)).toEqual(['success', 'error'])
+  // The copy from before is kept for the diff.
+  expect(disk[COPY]).toBe('one\ntwo\nthree\nfour\nfive\n')
+  await ui.unmount()
+})
+
+test('a change opens in VS Code as a diff against the file before the session first changed it', async ($, on) => {
+  const ran: (readonly string[])[] = []
+  const toasts: string[] = []
+  const disk: Record<string, string> = {}
+  files(on, 1_000_500, { disk, toasts })
+  on('fs.exists', () => ({ value: true }))
+  on('process.run', (_, e) => {
+    ran.push(e.argv)
+
+    return {
+      value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  const calls = answers(on, edited('first\n'))
+
+  disk[CODE_FILE] = 'second\n'
+  await editCall($)
+  calls.answer = edited('second\n')
+  disk[CODE_FILE] = 'third\n'
+  await editCall($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await rowsOf(ui))[0]).toMatch(/ \+1 -1$/)
+  await ui.press({ key: `open:${CODE_FILE}` })
+
+  expect(disk[COPY]).toBe('first\n')
+  expect(ran).toEqual([['code', '--diff', COPY, CODE_FILE]])
+  expect(toasts).toEqual(['Opened the changes to app.ts in VS Code'])
+  await ui.unmount()
+})
+
+test('a diff VS Code cannot open says why', async ($, on) => {
+  const toasts: string[] = []
+  files(on, 1_000_500, { disk: { [CODE_FILE]: 'after\n' }, toasts })
+  on('fs.exists', () => ({ value: true }))
+  on('process.run', () => ({
+    value: { exitCode: 127, stdout: '', stderr: 'code: not found\n', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  answers(on, edited('before\n'))
+
+  await editCall($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: `open:${CODE_FILE}` })
+
+  expect(toasts).toEqual(['Could not open the changes to app.ts: code: not found'])
+  await ui.unmount()
+})
+
+test('a document Claude creates is a change with every line gained, and leaves Files', async ($, on) => {
+  const notes = '/work/notes.md'
+  const disk: Record<string, string> = { [notes]: 'a\nb\n' }
+  files(on, 1_000_500, { disk })
+  answers(on, {
+    result: { type: 'create', filePath: notes, content: 'a\nb\n', originalFile: null, structuredPatch: [] },
+    text: `File created successfully at: ${notes}`,
+  })
+
+  await $.tool.call({ tool: 'Write', file_path: notes, content: 'a\nb\n' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await rowsOf(ui)).toEqual([expect.stringMatching(/^▌ notes\.md +md +\d\d:\d\d +\+2$/)])
+  expect(await ui.find({ type: 'Text', text: /^Files$/ })).toBeUndefined()
+  expect(disk[`/home/me/claude-session-outputs/s1${notes}`]).toBe('')
+  await ui.unmount()
+})
+
+test('a command that later puts a changed file back shows it unchanged', async ($, on) => {
+  let mtime = 1_000_500
+  const disk: Record<string, string> = { [CODE_FILE]: 'after\n' }
+  files(on, () => mtime, { disk })
+  const calls = answers(on, edited('before\n'))
+
+  await editCall($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await rowsOf(ui))[0]).toMatch(/ \+1 -1$/)
+
+  calls.answer = { result: {}, text: '' }
+  disk[CODE_FILE] = 'before\n'
+  mtime = 1_000_900
+  await $.tool.call({ tool: 'Bash', command: `git checkout -- ${CODE_FILE}` })
+
+  expect((await rowsOf(ui))[0]).toMatch(/ unchanged$/)
+  await ui.unmount()
+})
+
+test('an edit held for review, or a write whose old content was too large to record, is not listed', async ($, on) => {
+  const disk: Record<string, string> = {}
+  files(on, 1_000_500, { disk })
+  const calls = answers(on, {
+    result: { filePath: CODE_FILE, originalFile: 'before\n', oldString: 'x', newString: 'y', staged: true },
+    text: '',
+  })
+
+  await editCall($)
+  calls.answer = {
+    result: { type: 'update', filePath: '/work/big.ts', content: 'x', originalFile: null, structuredPatch: [] },
+    text: '',
+  }
+  await $.tool.call({ tool: 'Write', file_path: '/work/big.ts', content: 'x' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await rowsOf(ui)).toEqual([])
+  expect(Object.keys(disk)).toEqual([])
+  await ui.unmount()
+})
+
+test('a session joined midway counts a change against the copy from its first edit', async ($, on) => {
+  const disk: Record<string, string> = { [CODE_FILE]: 'third\n' }
+  files(on, 1_000_500, { disk })
+  const edit = (id: string, before: string) => ({
+    tool_use_id: id,
+    tool: 'Edit',
+    input: { file_path: CODE_FILE, old_string: 'x', new_string: 'y' },
+    ...edited(before),
+  })
+  const rows = [{ role: 'assistant', text: '', toolUses: [edit('t1', 'first\n'), edit('t2', 'second\n')] }]
+  on('command.register', () => ({ value: {} }) as never)
+  on('session.messages', (_, e) => ({ value: (e as { as?: string }).as === 'api' ? [] : rows }) as never)
+  on('session.usage', () => ({ value: { startedAt: 0, context: {}, rateLimits: [] } }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await rowsOf(ui)).toEqual([expect.stringMatching(/^▌ app\.ts +ts +\d\d:\d\d +\+1 -1$/)])
+  expect(disk[COPY]).toBe('first\n')
   await ui.unmount()
 })

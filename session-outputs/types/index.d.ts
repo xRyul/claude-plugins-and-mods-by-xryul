@@ -39,7 +39,18 @@ export type SessionFile = {
   lines?: number
 }
 
-export type Group = 'artifacts' | 'files' | 'images'
+export type SessionChange = {
+  path: string
+  /** When the file was last written, milliseconds since the epoch. */
+  modifiedAt: number
+  /** The copy of the file as it stood before the session first changed it. */
+  before: string
+  /** Lines the file has gained and lost against that copy. */
+  added: number
+  removed: number
+}
+
+export type Group = 'artifacts' | 'changes' | 'files' | 'images'
 
 declare module 'claude-code' {
   interface PluginState {
@@ -47,6 +58,7 @@ declare module 'claude-code' {
       images: Shaped<SessionImage[]>
       artifacts: Shaped<SessionArtifact[]>
       files: Shaped<SessionFile[]>
+      changes: Shaped<SessionChange[]>
       /** Each Artifact type's name the session has seen, by the type's link. */
       typeNames: Record<string, string>
       hasAutoOpened: boolean
